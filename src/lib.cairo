@@ -21,13 +21,18 @@ use starknet::{ContractAddress, get_caller_address,};
         fn is_valid_signature(self: @TState, hash: felt252, signature: Array<felt252>) -> felt252;
     }
 
-#[starknet::contract]
+
+
+#[starknet::contract(account)]
 mod AA {
-    use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
+    use starknet::SyscallResultTrait;
+use starknet::syscalls::call_contract_syscall;
+use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
     StoragePointerWriteAccess, Vec,};
     use super::{ContractAddress, get_caller_address, SessionKey};
     use starknet::secp256k1::Secp256k1Point;
     use core::ecdsa;
+    use super::Call;
 
     #[storage]
     struct Storage {
@@ -116,7 +121,44 @@ mod AA {
         return valid_count;
     }
 
-    
+    #[abi(embed_v0)]
+    impl Account of super::IAccount<ContractState>{
+
+        fn __validate__(ref self: ContractState, calls: Array<Call>) -> felt252 {
+            let tx_info = starknet::get_tx_info().unbox();
+            let tx_hash = tx_info.transaction_hash;
+            let signature = tx_info.signature;
+
+            let valid_count = count_valid_signatures(@self, tx_hash, signature);
+            assert(valid_count >= self.threshold.read(), 'Invalid signature count');
+            return starknet::VALIDATED;
+        }
+
+        fn __execute__(ref self: ContractState, calls: Array<Call>) -> Array<Span<felt252>> {
+            assert!(starknet::get_caller_address() == starknet::get_contract_address(), "Only self call allowed");
+            let mut results: Array<Span<felt252>> = ArrayTrait::new();
+           for call in calls{
+                let res = starknet::syscalls::call_contract_syscall(
+                     call.to,
+                     call.selector, 
+                     call.calldata.span()).unwrap_syscall();
+            results.append(res);
+           }
+        return results;
+        }
+
+        fn is_valid_signature(self: @ContractState, hash: felt252, signature: Array<felt252>) -> felt252 {
+            let sig_span: Span<felt252> = signature.span();
+            let valid_count = count_valid_signatures(self, hash, sig_span);
+            if(valid_count >= self.threshold.read()){
+                return starknet::VALIDATED;
+            }
+            0
+        }
+
+
+
+    }
 
     
 }

@@ -1,4 +1,4 @@
-use starknet::{ContractAddress, get_caller_address,};
+use starknet::{ContractAddress, get_caller_address, get_contract_address};
 
 #[derive(Drop, Serde, Copy, starknet::Store)]
     struct SessionKey{
@@ -21,18 +21,26 @@ use starknet::{ContractAddress, get_caller_address,};
         fn is_valid_signature(self: @TState, hash: felt252, signature: Array<felt252>) -> felt252;
     }
 
-
+#[starknet::interface]
+    trait IAccountManagement<TState> {
+       fn add_guardian(ref self: TState, address: ContractAddress);
+       fn remove_guardian(ref self: TState, address: ContractAddress);
+       fn add_session_key(ref self: TState, key: felt252, allowed_contract: ContractAddress, expires_at: u64, max_amount: u256);
+       fn revoke_session_key(ref self: TState, key: felt252);
+    }
 
 #[starknet::contract(account)]
 mod AA {
     use starknet::SyscallResultTrait;
-use starknet::syscalls::call_contract_syscall;
-use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
+    use starknet::syscalls::call_contract_syscall;
+    use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
     StoragePointerWriteAccess, Vec,};
-    use super::{ContractAddress, get_caller_address, SessionKey};
+    use super::{ContractAddress, get_caller_address, get_contract_address, SessionKey};
     use starknet::secp256k1::Secp256k1Point;
     use core::ecdsa;
     use super::Call;
+    use super::IAccountManagement;
+    use core::num::traits::Zero;
 
     #[storage]
     struct Storage {
@@ -156,6 +164,36 @@ use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
             0
         }
 
+
+
+    }
+
+    #[abi(embed_v0)]
+    impl AccountManagement of super::IAccountManagement<ContractState>{
+
+        fn add_guardian(ref self: ContractState, address: ContractAddress){
+            assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
+            self.guardians.entry(address).write(true);
+        }
+
+        fn remove_guardian(ref self: ContractState, address: ContractAddress){
+            assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
+            self.guardians.entry(address).write(false);
+        }
+
+        fn add_session_key(ref self: ContractState, key: felt252, allowed_contract: ContractAddress, expires_at: u64, max_amount: u256){
+            assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
+
+            let session_key = SessionKey { allowed_contract: allowed_contract, expires_at: expires_at, max_amount:  max_amount};
+            self.session_keys.entry(key).write(session_key);
+        }
+
+        fn revoke_session_key(ref self: ContractState, key: felt252){
+            assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
+            let zero_address: ContractAddress = Zero::zero();
+            let session_key = SessionKey { allowed_contract: zero_address, expires_at: 0, max_amount: 0};
+            self.session_keys.entry(key).write(session_key);
+        }
 
 
     }

@@ -1,4 +1,4 @@
-use starknet::{ContractAddress, get_caller_address, get_contract_address};
+use starknet::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp};
 
 #[derive(Drop, Serde, Copy, starknet::Store)]
     struct SessionKey{
@@ -27,58 +27,55 @@ use starknet::{ContractAddress, get_caller_address, get_contract_address};
        fn remove_guardian(ref self: TState, address: ContractAddress);
        fn add_session_key(ref self: TState, key: felt252, allowed_contract: ContractAddress, expires_at: u64, max_amount: u256);
        fn revoke_session_key(ref self: TState, key: felt252);
+       fn replace_owner(ref self: TState, old_pub_key: felt252, new_pub_key: felt252);
     }
 
 #[starknet::contract(account)]
 mod AA {
+    use starknet::event::EventEmitter;
     use starknet::SyscallResultTrait;
     use starknet::syscalls::call_contract_syscall;
     use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
     StoragePointerWriteAccess, Vec,};
-    use super::{ContractAddress, get_caller_address, get_contract_address, SessionKey};
-    use starknet::secp256k1::Secp256k1Point;
+    use super::{ContractAddress, get_caller_address, get_contract_address, SessionKey, get_block_timestamp};
     use core::ecdsa;
+    use core::ecdsa::check_ecdsa_signature;
     use super::Call;
     use super::IAccountManagement;
     use core::num::traits::Zero;
 
     #[storage]
     struct Storage {
-        owners: Map<ContractAddress, bool>,
+        public_keys: Map<felt252, bool>,
         threshold: u32,
         guardians: Map<ContractAddress, bool>,
         session_keys: Map<felt252, SessionKey>,
-        nonce: felt252,
     }
 
     #[event]
     #[derive(Drop, starknet::Event)]
     enum Event{
         OwnerAdded: OwnerAdded,
+        OwnerRemoved: OwnerRemoved,
     }
 
     #[derive(Drop, starknet::Event)]
     struct OwnerAdded{
-        address: ContractAddress
+        pub_key: felt252,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct OwnerRemoved {
+        pub_key: felt252,
     }
 
     #[constructor]
-    fn constructor(ref self: ContractState, address_0: ContractAddress, address_1: ContractAddress, address_2: ContractAddress){
-        self.owners.entry(address_0).write(true);
-        self.owners.entry(address_1).write(true);
-        self.owners.entry(address_2).write(true);
+    fn constructor(ref self: ContractState, pub_key_0: felt252, pub_key_1: felt252, pub_key_2: felt252){
+        self.public_keys.entry(pub_key_0).write(true);
+        self.public_keys.entry(pub_key_1).write(true);
+        self.public_keys.entry(pub_key_2).write(true);
         self.threshold.write(2);
 
-    }
-
-    fn is_valid_signature_for_owner(
-        owner: ContractAddress,
-        hash: felt252,
-        sig_r: felt252,
-        sig_s: felt252
-     ) -> bool {
-        let owner_felt: felt252 = owner.into();
-        ecdsa::check_ecdsa_signature(hash, owner_felt, sig_r, sig_s)
     }
 
     fn count_valid_signatures(self: @ContractState, hash: felt252, signature: Span<felt252>) -> u32 {
@@ -86,12 +83,10 @@ mod AA {
         let mut i = 0;
 
         // Track already verified owners to prevent duplicate signature exploits
-        let mut seen: Array<ContractAddress> = ArrayTrait::new();
+        let mut seen: Array<felt252> = ArrayTrait::new();
 
         while (i + 3 <= signature.len()) {
-            let owner_felt = *signature[i];
-            let owner: ContractAddress = owner_felt.try_into().unwrap();
-            
+            let pub_key = *signature[i];
             let sig_r = *signature[i + 1];
             let sig_s = *signature[i + 2];
 
@@ -99,7 +94,7 @@ mod AA {
             i += 3;
 
             // Verify if the extracted address is a registered owner
-            if !self.owners.entry(owner).read() {
+            if !self.public_keys.entry(pub_key).read() {
                 continue;
             }
 
@@ -107,7 +102,7 @@ mod AA {
             let mut already_seen = false;
             let mut j: u32 = 0;
             while j < seen.len() {
-                if *seen.at(j) == owner {
+                if *seen.at(j) == pub_key {
                     already_seen = true;
                     break;
                 }
@@ -118,11 +113,11 @@ mod AA {
                 continue;
             }
 
+            seen.append(pub_key);
             // Validate ECDSA signature and increment counter if valid
-            let is_valid = is_valid_signature_for_owner(owner, hash, sig_r, sig_s);
+            let is_valid = core::ecdsa::check_ecdsa_signature(hash, pub_key, sig_r, sig_s);
             if is_valid {
                 valid_count += 1;
-                seen.append(owner);
             }
         }
 
@@ -138,12 +133,37 @@ mod AA {
             let signature = tx_info.signature;
 
             let valid_count = count_valid_signatures(@self, tx_hash, signature);
-            assert(valid_count >= self.threshold.read(), 'Invalid signature count');
+
+            // multisig
+            if(valid_count >= self.threshold.read()){
+                return starknet::VALIDATED;
+            }
+
+            assert!(signature.len() >= 3, "Invalid signature length");
+
+            //session_key
+            let key_felt = *signature.at(0);
+            let r = *signature.at(1);
+            let s = *signature.at(2);
+            let session_key: SessionKey = self.session_keys.entry(key_felt).read();
+
+            let zero_address: ContractAddress = Zero::zero();
+            assert!(session_key.allowed_contract != zero_address, "Session key does not exist or revoked");
+            assert!(session_key.expires_at > get_block_timestamp(), "Session key expired");
+
+            for call in calls.span() {
+                assert!(*call.to == session_key.allowed_contract, "Session key: unauthorized contract");
+            }
+
+            let is_valid_crypto = check_ecdsa_signature(tx_hash, key_felt, r, s);
+            assert!(is_valid_crypto, "Invalid session key signature");
             return starknet::VALIDATED;
+
         }
 
         fn __execute__(ref self: ContractState, calls: Array<Call>) -> Array<Span<felt252>> {
-            assert!(starknet::get_caller_address() == starknet::get_contract_address(), "Only self call allowed");
+            let zero_address: ContractAddress = Zero::zero();
+            assert!(starknet::get_caller_address() == zero_address, "Only self call allowed");
             let mut results: Array<Span<felt252>> = ArrayTrait::new();
            for call in calls{
                 let res = starknet::syscalls::call_contract_syscall(
@@ -194,6 +214,19 @@ mod AA {
             let session_key = SessionKey { allowed_contract: zero_address, expires_at: 0, max_amount: 0};
             self.session_keys.entry(key).write(session_key);
         }
+
+        fn replace_owner(ref self: ContractState, old_pub_key: felt252, new_pub_key: felt252){
+            assert!(self.guardians.entry(get_caller_address()).read(), "Only guardians can call this fn");
+            assert!(self.public_keys.entry(old_pub_key).read(), "old owner is not on owners");
+            assert!(!self.public_keys.entry(new_pub_key).read(), "new_owner is already on owners");
+            assert!(new_pub_key != 0, "New public key cannot be 0");
+            self.public_keys.entry(old_pub_key).write(false);
+            self.public_keys.entry(new_pub_key).write(true);
+            self.emit(OwnerRemoved { pub_key: old_pub_key });
+            self.emit(OwnerAdded{pub_key: new_pub_key});
+        }
+
+
 
 
     }

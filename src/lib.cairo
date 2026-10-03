@@ -2,9 +2,9 @@ use starknet::{ContractAddress, get_caller_address, get_contract_address, get_bl
 
 #[derive(Drop, Serde, Copy, starknet::Store)]
     struct SessionKey{
-        allowed_contract: ContractAddress,
         expires_at: u64,
-        max_amount: u256,
+        max_calls: u32,
+        calls_used: u32,
     }
 
 #[derive(Drop, Serde)]
@@ -25,7 +25,7 @@ use starknet::{ContractAddress, get_caller_address, get_contract_address, get_bl
     trait IAccountManagement<TState> {
        fn add_guardian(ref self: TState, address: ContractAddress);
        fn remove_guardian(ref self: TState, address: ContractAddress);
-       fn add_session_key(ref self: TState, key: felt252, allowed_contract: ContractAddress, expires_at: u64, max_amount: u256);
+       fn add_session_key(ref self: TState, key: felt252, expires_at: u64, max_calls: u32, allowed_entrypoints: Array<felt252>);
        fn revoke_session_key(ref self: TState, key: felt252);
        fn replace_owner(ref self: TState, old_pub_key: felt252, new_pub_key: felt252);
     }
@@ -36,7 +36,7 @@ mod AA {
     use starknet::SyscallResultTrait;
     use starknet::syscalls::call_contract_syscall;
     use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
-    StoragePointerWriteAccess, Vec,};
+    StoragePointerWriteAccess, Vec, MutableVecTrait, VecTrait};
     use super::{ContractAddress, get_caller_address, get_contract_address, SessionKey, get_block_timestamp};
     use core::ecdsa;
     use core::ecdsa::check_ecdsa_signature;
@@ -50,6 +50,7 @@ mod AA {
         threshold: u32,
         guardians: Map<ContractAddress, bool>,
         session_keys: Map<felt252, SessionKey>,
+        allowed_entrypoints: Map<felt252, Vec<felt252>>
     }
 
     #[event]
@@ -145,18 +146,38 @@ mod AA {
             let key_felt = *signature.at(0);
             let r = *signature.at(1);
             let s = *signature.at(2);
-            let session_key: SessionKey = self.session_keys.entry(key_felt).read();
-
-            let zero_address: ContractAddress = Zero::zero();
-            assert!(session_key.allowed_contract != zero_address, "Session key does not exist or revoked");
+            let mut session_key: SessionKey = self.session_keys.entry(key_felt).read();
+            
+           // let zero_address: ContractAddress = Zero::zero();
             assert!(session_key.expires_at > get_block_timestamp(), "Session key expired");
-
+            assert!(session_key.max_calls > session_key.calls_used, "max_calls expired");
+            let this_contract = get_contract_address();
+            
             for call in calls.span() {
-                assert!(*call.to == session_key.allowed_contract, "Session key: unauthorized contract");
-            }
+                let len =  self.allowed_entrypoints.entry(key_felt).len();
+                let mut is_allowed = false;
+                let mut i = 0;
+                assert!(*call.to != this_contract, "session keys can't manage itself");
 
+                while(i < len) {
+                    if(self.allowed_entrypoints.entry(key_felt).at(i).read() == *call.selector) {
+                        is_allowed = true;
+                        break;
+                    }else{
+                        i += 1;
+                    }
+                }
+                assert!(is_allowed == true, "selector isn't allowed");
+            }
+            
+
+            
             let is_valid_crypto = check_ecdsa_signature(tx_hash, key_felt, r, s);
             assert!(is_valid_crypto, "Invalid session key signature");
+
+            session_key.calls_used += 1;
+            self.session_keys.entry(key_felt).write(session_key);
+
             return starknet::VALIDATED;
 
         }
@@ -166,6 +187,7 @@ mod AA {
             assert!(starknet::get_caller_address() == zero_address, "Only self call allowed");
             let mut results: Array<Span<felt252>> = ArrayTrait::new();
            for call in calls{
+                
                 let res = starknet::syscalls::call_contract_syscall(
                      call.to,
                      call.selector, 
@@ -183,9 +205,6 @@ mod AA {
             }
             0
         }
-
-
-
     }
 
     #[abi(embed_v0)]
@@ -201,18 +220,31 @@ mod AA {
             self.guardians.entry(address).write(false);
         }
 
-        fn add_session_key(ref self: ContractState, key: felt252, allowed_contract: ContractAddress, expires_at: u64, max_amount: u256){
+        fn add_session_key(ref self: ContractState, key: felt252, expires_at: u64, max_calls: u32, allowed_entrypoints: Array<felt252>){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
 
-            let session_key = SessionKey { allowed_contract: allowed_contract, expires_at: expires_at, max_amount:  max_amount};
+            let session_key = SessionKey {expires_at: expires_at, max_calls: max_calls, calls_used: 0};
+            let mut storage_vec = self.allowed_entrypoints.entry(key);
+
+            while storage_vec.len() > 0 {
+                let _ = storage_vec.pop();
+            }
+
+            for entrypoint in allowed_entrypoints{
+                storage_vec.push(entrypoint);
+            }
             self.session_keys.entry(key).write(session_key);
         }
 
         fn revoke_session_key(ref self: ContractState, key: felt252){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
-            let zero_address: ContractAddress = Zero::zero();
-            let session_key = SessionKey { allowed_contract: zero_address, expires_at: 0, max_amount: 0};
+            let session_key = SessionKey { expires_at: 0, max_calls: 0, calls_used: 0};
             self.session_keys.entry(key).write(session_key);
+            let mut storage_vec = self.allowed_entrypoints.entry(key);
+              while storage_vec.len() > 0 {
+                let _ = storage_vec.pop();
+            }
+
         }
 
         fn replace_owner(ref self: ContractState, old_pub_key: felt252, new_pub_key: felt252){

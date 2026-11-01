@@ -21,9 +21,8 @@ build_job:
 test_job:
   stage: test
   script:
-    - export PATH="$HOME/.local/bin:$PATH"
-    # Установка Starknet Foundry (snforge)
+    - curl --proto '=https' --tlsv1.2 -sSf https://docs.swmansion.com/scarb/install.sh | bash -s -- -v $SCARB_VERSION
     - curl -L https://raw.githubusercontent.com/foundry-rs/starknet-foundry/master/scripts/install.sh | sh
-    - export PATH="$HOME/.foundry/bin:$PATH"
+    - export PATH="$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
     - snforge --version
     - scarb test

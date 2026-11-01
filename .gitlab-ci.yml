@@ -1,0 +1,22 @@
+stages:
+  - build
+  - test
+
+image: ubuntu:22.04
+
+before_script:
+  - apt-get update && apt-get install -y curl git ca-certificates
+  - curl --proto '=https' --tlsv1.2 -sSf https://docs.swmansion.com/scarb/install.sh | sh
+  - export PATH="$HOME/.local/bin:$PATH"
+
+build_job:
+  stage: build
+  script:
+    - scarb --version
+    - scarb build
+
+test_job:
+  stage: test
+  script:
+    - export PATH="$HOME/.local/bin:$PATH"
+    - scarb test

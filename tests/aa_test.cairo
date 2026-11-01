@@ -1,6 +1,3 @@
-
-
-
 #[cfg(test)]
 mod tests{
     use snforge_std::{stop_cheat_caller_address_global, cheat_caller_address,
@@ -136,12 +133,102 @@ mod tests{
         assert!(*allowed_entrypoints_1.at(0).selector == selector!("swap"), "must be swap");
         assert!(*allowed_entrypoints_1.at(1).selector == selector!("approve"), "must be approve");
         assert!(*allowed_entrypoints_1.at(2).selector == selector!("transfer"), "must be transfer");
-
-
-
-
     }
 
+    #[test]
+    fn test_revoke_session_key(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+
+        let session_contract = SessionEntrypoint{target_contract: 0x012345, selector: selector!("transfer")};
+        let session_contract_1 = SessionEntrypoint{target_contract: 0x012345, selector: selector!("approve")};
+        let session_contract_2 = SessionEntrypoint{target_contract: 0x54321, selector: selector!("swap")};
+
+        // put calldata of constructor
+        let constructor_calldata = array![1, 2, 3];
+
+        // deploy AA and get address
+        let (contract_address, _) = contract
+            .deploy(@constructor_calldata)
+            .unwrap();
+
+        // create dispatcher
+        let dispatcher = IAccountManagementDispatcher {
+            contract_address,
+        };
+
+        // call contract fn from itself
+        start_cheat_caller_address(contract_address, contract_address);
+        dispatcher.add_session_key(100, 4000, 5, array![session_contract, session_contract_1, session_contract_2]);
+        stop_cheat_caller_address(contract_address);
+        let session_key = dispatcher.get_session_key(100);
+        let allowed_entrypoints = dispatcher.get_allowed_entrypoints(100);
+        assert!(session_key.expires_at == 4000, "expires at must be 4000");
+        assert!(session_key.max_calls == 5, "max calls must be 5");
+        assert!(session_key.calls_used == 0, "calls used must be zero");
+        assert!(session_key.allowed_entrypoints_len == 3, "must be 3");
+        assert!(*allowed_entrypoints.at(0).selector == selector!("transfer"), "must be same");
+        assert!(*allowed_entrypoints.at(1).selector == selector!("approve"), "must be same");
+        assert!(*allowed_entrypoints.at(2).selector == selector!("swap"), "must be same");
+        assert!(*allowed_entrypoints.at(0).target_contract == 0x012345, "wrong target");
+        assert!(*allowed_entrypoints.at(1).target_contract == 0x012345, "wrong target");
+        assert!(*allowed_entrypoints.at(2).target_contract == 0x54321, "wrong target");
+        assert!(allowed_entrypoints.len() == 3, "wrong array length");
+
+        start_cheat_caller_address(contract_address, contract_address);
+        dispatcher.revoke_session_key(100);
+        stop_cheat_caller_address(contract_address);
+        let new_session_key = dispatcher.get_session_key(100);
+        let new_allowed_entrypoints = dispatcher.get_allowed_entrypoints(100);
+        assert!(new_session_key.expires_at == 0, "expires at must be zero");
+        assert!(new_session_key.max_calls == 0, "max calls must be zero");
+        assert!(new_session_key.calls_used == 0, "calls used must be zero");
+        assert!(new_session_key.allowed_entrypoints_len == 0, "must be zero");
+        assert!(new_allowed_entrypoints.len() == 0, "wrong array length");
+    }
+
+    #[should_panic(expected: "Only self call allowed")]
+    #[test]
+    fn test_add_session_key_unauthorized() {
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+
+        let session_contract = SessionEntrypoint{target_contract: 0x012345, selector: selector!("transfer")};
+
+        // put calldata of constructor
+        let constructor_calldata = array![1, 2, 3];
+
+        // deploy AA and get address
+        let (contract_address, _) = contract
+            .deploy(@constructor_calldata)
+            .unwrap();
+
+        // create dispatcher
+        let dispatcher = IAccountManagementDispatcher {
+            contract_address,
+        };
+
+        dispatcher.add_session_key(100, 5500, 3, array![session_contract]);
+    }
+    #[should_panic(expected: "Only self call allowed")]
+    #[test]
+    fn test_revoke_session_key_unauthorized(){
+            let contract = declare("aa_experiment::AA").unwrap().contract_class();
+
+
+        // put calldata of constructor
+        let constructor_calldata = array![1, 2, 3];
+
+        // deploy AA and get address
+        let (contract_address, _) = contract
+            .deploy(@constructor_calldata)
+            .unwrap();
+
+        // create dispatcher
+        let dispatcher = IAccountManagementDispatcher {
+            contract_address,
+        };
+
+        dispatcher.revoke_session_key(100);
+    }
     
 
    

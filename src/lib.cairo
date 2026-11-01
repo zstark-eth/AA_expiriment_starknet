@@ -266,9 +266,13 @@ pub mod AA {
 
         fn revoke_session_key(ref self: ContractState, key: felt252){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
+            let entrypoint_len = self.session_keys.entry(key).allowed_entrypoints_len.read();
+            for i in 0..entrypoint_len{
+                let entrypoint_nullifier = SessionEntrypoint { target_contract: Zero::zero(), selector: 0 };
+                self.session_entrypoints.entry((key, i)).write(entrypoint_nullifier);
+            }
             let session_key = SessionKey { expires_at: 0, max_calls: 0, calls_used: 0, allowed_entrypoints_len: 0};
             self.session_keys.entry(key).write(session_key);
-
         }
 
         fn replace_owner(ref self: ContractState, old_pub_key: felt252, new_pub_key: felt252){

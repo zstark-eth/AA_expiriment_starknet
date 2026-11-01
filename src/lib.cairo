@@ -1,44 +1,64 @@
 use starknet::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp};
 
+
 #[derive(Drop, Serde, Copy, starknet::Store)]
-    struct SessionKey{
-        expires_at: u64,
-        max_calls: u32,
-        calls_used: u32,
+    pub struct SessionKey{
+        pub expires_at: u64,
+        pub max_calls: u32,
+        pub calls_used: u32,
+        pub allowed_entrypoints_len: u32
+    }
+
+#[derive(Drop, Serde, Copy, starknet::Store)]
+    pub struct SessionEntrypoint{
+       pub target_contract: ContractAddress, // contract that we call, for example - USDC
+       pub selector: felt252, // selector of contract that we call, for example - transfer
+    }
+
+#[derive(Drop, Serde, Copy, starknet::Store)]
+    pub struct SpendingPolicy{
+        is_configured: bool,
+        max_per_call: u256,  // max amount per a call
+        max_per_transaction: u256, // max amount of all transfers of this token in batch
+        max_per_window: u256, // 
+        window_seconds: u64,
+        window_start: u64,
+        spent_in_window: u256
     }
 
 #[derive(Drop, Serde)]
-    struct Call{
+    pub struct Call{
         to: ContractAddress,
         selector: felt252,
         calldata: Array<felt252>
     }
 
 #[starknet::interface]
-    trait IAccount<TState> {
+    pub trait IAccount<TState> {
         fn __validate__(ref self: TState, calls: Array<Call>) -> felt252;
         fn __execute__(ref self: TState, calls: Array<Call>) -> Array<Span<felt252>>;
         fn is_valid_signature(self: @TState, hash: felt252, signature: Array<felt252>) -> felt252;
     }
 
 #[starknet::interface]
-    trait IAccountManagement<TState> {
+    pub trait IAccountManagement<TState> {
        fn add_guardian(ref self: TState, address: ContractAddress);
        fn remove_guardian(ref self: TState, address: ContractAddress);
-       fn add_session_key(ref self: TState, key: felt252, expires_at: u64, max_calls: u32, allowed_entrypoints: Array<felt252>);
+       fn add_session_key(ref self: TState, key: felt252, expires_at: u64, max_calls: u32, allowed_entrypoints: Array<SessionEntrypoint>);
        fn revoke_session_key(ref self: TState, key: felt252);
        fn replace_owner(ref self: TState, old_pub_key: felt252, new_pub_key: felt252);
+       fn get_session_key(self: @TState, key: felt252) -> SessionKey;
+       fn get_allowed_entrypoints(self: @TState, key: felt252) -> Array<SessionEntrypoint>;
     }
 
 #[starknet::contract(account)]
-mod AA {
+pub mod AA {
     use starknet::event::EventEmitter;
     use starknet::SyscallResultTrait;
     use starknet::syscalls::call_contract_syscall;
     use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
     StoragePointerWriteAccess, Vec, MutableVecTrait, VecTrait};
-    use super::{ContractAddress, get_caller_address, get_contract_address, SessionKey, get_block_timestamp};
-    use core::ecdsa;
+    use super::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp, SessionKey, SessionEntrypoint, SpendingPolicy};
     use core::ecdsa::check_ecdsa_signature;
     use super::Call;
     use super::IAccountManagement;
@@ -49,8 +69,10 @@ mod AA {
         public_keys: Map<felt252, bool>,
         threshold: u32,
         guardians: Map<ContractAddress, bool>,
-        session_keys: Map<felt252, SessionKey>,
-        allowed_entrypoints: Map<felt252, Vec<felt252>>
+       pub session_keys: Map<felt252, SessionKey>,
+       pub session_entrypoints: Map<(felt252, u32), SessionEntrypoint>,
+       spending_policies: Map<(felt252, ContractAddress), SpendingPolicy>
+
     }
 
     #[event]
@@ -154,13 +176,13 @@ mod AA {
             let this_contract = get_contract_address();
             
             for call in calls.span() {
-                let len =  self.allowed_entrypoints.entry(key_felt).len();
+                let len =  self.session_keys.entry(key_felt).allowed_entrypoints_len.read();
                 let mut is_allowed = false;
                 let mut i = 0;
                 assert!(*call.to != this_contract, "session keys can't manage itself");
 
                 while(i < len) {
-                    if(self.allowed_entrypoints.entry(key_felt).at(i).read() == *call.selector) {
+                    if(self.session_entrypoints.entry((key_felt, i)).selector.read() == *call.selector) {
                         is_allowed = true;
                         break;
                     }else{
@@ -169,8 +191,7 @@ mod AA {
                 }
                 assert!(is_allowed == true, "selector isn't allowed");
             }
-            
-
+ 
             
             let is_valid_crypto = check_ecdsa_signature(tx_hash, key_felt, r, s);
             assert!(is_valid_crypto, "Invalid session key signature");
@@ -194,7 +215,7 @@ mod AA {
                      call.calldata.span()).unwrap_syscall();
             results.append(res);
            }
-        return results;
+            return results;
         }
 
         fn is_valid_signature(self: @ContractState, hash: felt252, signature: Array<felt252>) -> felt252 {
@@ -220,30 +241,33 @@ mod AA {
             self.guardians.entry(address).write(false);
         }
 
-        fn add_session_key(ref self: ContractState, key: felt252, expires_at: u64, max_calls: u32, allowed_entrypoints: Array<felt252>){
+        fn add_session_key(ref self: ContractState, key: felt252, expires_at: u64, max_calls: u32, allowed_entrypoints: Array<SessionEntrypoint>){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
+            let new_entrypoints_len = allowed_entrypoints.len();
+            let old_entrypoints_len = self.session_keys.entry(key).allowed_entrypoints_len.read();
+            let mut i = 0;
 
-            let session_key = SessionKey {expires_at: expires_at, max_calls: max_calls, calls_used: 0};
-            let mut storage_vec = self.allowed_entrypoints.entry(key);
-
-            while storage_vec.len() > 0 {
-                let _ = storage_vec.pop();
+         if(new_entrypoints_len < old_entrypoints_len){
+             
+             for j in new_entrypoints_len..old_entrypoints_len{
+                let entrypoint_nullifier = SessionEntrypoint { target_contract: Zero::zero(), selector: 0};
+                self.session_entrypoints.entry((key, j)).write(entrypoint_nullifier);
             }
-
+         }
             for entrypoint in allowed_entrypoints{
-                storage_vec.push(entrypoint);
+                let session_entrypoints = SessionEntrypoint { target_contract: entrypoint.target_contract, selector:  entrypoint.selector};
+                self.session_entrypoints.entry((key, i)).write(session_entrypoints);
+                i += 1;
             }
+
+            let session_key = SessionKey {expires_at: expires_at, max_calls: max_calls, calls_used: 0, allowed_entrypoints_len: new_entrypoints_len};
             self.session_keys.entry(key).write(session_key);
         }
 
         fn revoke_session_key(ref self: ContractState, key: felt252){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
-            let session_key = SessionKey { expires_at: 0, max_calls: 0, calls_used: 0};
+            let session_key = SessionKey { expires_at: 0, max_calls: 0, calls_used: 0, allowed_entrypoints_len: 0};
             self.session_keys.entry(key).write(session_key);
-            let mut storage_vec = self.allowed_entrypoints.entry(key);
-              while storage_vec.len() > 0 {
-                let _ = storage_vec.pop();
-            }
 
         }
 
@@ -257,6 +281,21 @@ mod AA {
             self.emit(OwnerRemoved { pub_key: old_pub_key });
             self.emit(OwnerAdded{pub_key: new_pub_key});
         }
+
+        fn get_session_key(self: @ContractState, key: felt252) -> SessionKey{
+             self.session_keys.entry(key).read() 
+        }
+
+        fn get_allowed_entrypoints(self: @ContractState, key: felt252) -> Array<SessionEntrypoint> {
+            let mut my_array = ArrayTrait::new();
+            let len = self.session_keys.entry(key).allowed_entrypoints_len.read();
+            let mut i = 0;
+            while i < len {
+            my_array.append(self.session_entrypoints.entry((key, i)).read());
+                i += 1;
+            };
+            return my_array;
+         }
 
 
 

@@ -5,24 +5,23 @@ stages:
   - build
   - test
 
-image: ubuntu:latest
+image: ubuntu:24.04
 
 before_script:
-  - export PATH="$HOME/.local/bin:$PATH"
   - apt-get update && apt-get install -y curl git ca-certificates tar jq
+  - export PATH="$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+  - curl --proto '=https' --tlsv1.2 -sSf https://docs.swmansion.com/scarb/install.sh | bash -s -- -v $SCARB_VERSION
 
 build_job:
   stage: build
   script:
-    - curl --proto '=https' --tlsv1.2 -sSf https://docs.swmansion.com/scarb/install.sh | bash -s -- -v $SCARB_VERSION
     - scarb --version
     - scarb build
 
 test_job:
   stage: test
   script:
-    - curl --proto '=https' --tlsv1.2 -sSf https://docs.swmansion.com/scarb/install.sh | bash -s -- -v $SCARB_VERSION
     - curl -L https://raw.githubusercontent.com/foundry-rs/starknet-foundry/master/scripts/install.sh | sh
-    - export PATH="$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+    - snfoundryup
     - snforge --version
     - scarb test

@@ -22,7 +22,7 @@ mod tests{
     #[test]
     fn test_deploy_aa() {
         let contract = declare("aa_experiment::AA").unwrap().contract_class();
-        let constructor_calldata = array![1, 2, 3];
+        let constructor_calldata = array![3, 1, 2, 3, 2];
 
         let (_contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
     }
@@ -38,7 +38,7 @@ mod tests{
         let session_contract_3 = SessionEntrypoint { target_contract: 0x0001, selector:  selector!("approve")};
 
         // put calldata of constructor
-        let constructor_calldata = array![1, 2, 3];
+        let constructor_calldata = array![3, 1, 2, 3, 2];
 
         // deploy AA and get address
         let (contract_address, _) = contract
@@ -101,7 +101,7 @@ mod tests{
 
 
         // put calldata of constructor
-        let constructor_calldata = array![1, 2, 3];
+        let constructor_calldata = array![3, 1, 2, 3, 2];
 
         // deploy AA and get address
         let (contract_address, _) = contract
@@ -155,7 +155,7 @@ mod tests{
         let session_contract_2 = SessionEntrypoint{target_contract: 0x54321, selector: selector!("swap")};
 
         // put calldata of constructor
-        let constructor_calldata = array![1, 2, 3];
+        let constructor_calldata = array![3, 1, 2, 3, 2];
 
         // deploy AA and get address
         let (contract_address, _) = contract
@@ -205,7 +205,7 @@ mod tests{
         let session_contract = SessionEntrypoint{target_contract: 0x012345, selector: selector!("transfer")};
 
         // put calldata of constructor
-        let constructor_calldata = array![1, 2, 3];
+        let constructor_calldata = array![3, 1, 2, 3, 2];
 
         // deploy AA and get address
         let (contract_address, _) = contract
@@ -224,7 +224,7 @@ mod tests{
     fn test_revoke_session_key_unauthorized(){
         let contract = declare("aa_experiment::AA").unwrap().contract_class();
         // put calldata of constructor
-        let constructor_calldata = array![1, 2, 3];
+        let constructor_calldata = array![3, 1, 2, 3, 2];
 
         // deploy AA and get address
         let (contract_address, _) = contract
@@ -244,7 +244,7 @@ mod tests{
     fn test_validate_allowed_entrypoint(){
         let contract = declare("aa_experiment::AA").unwrap().contract_class();
         // put calldata of constructor
-        let constructor_calldata = array![1, 2, 3];
+        let constructor_calldata = array![3, 1, 2, 3, 2];
 
         // deploy AA and get address
         let (contract_address, _) = contract
@@ -276,7 +276,7 @@ mod tests{
     fn test_validate_same_selector_different_contract(){
         let contract = declare("aa_experiment::AA").unwrap().contract_class();
         // put calldata of constructor
-        let constructor_calldata = array![1, 2, 3];
+        let constructor_calldata = array![3, 1, 2, 3, 2];
 
         // deploy AA and get address
         let (contract_address, _) = contract
@@ -309,7 +309,7 @@ mod tests{
     fn test_session_b_cannot_use_session_a_entrypoint(){
         let contract = declare("aa_experiment::AA").unwrap().contract_class();
         // put calldata of constructor
-        let constructor_calldata = array![1, 2, 3];
+        let constructor_calldata = array![3, 1, 2, 3, 2];
 
         // deploy AA and get address
         let (contract_address, _) = contract
@@ -345,7 +345,7 @@ mod tests{
     fn test_session_a_cannot_use_session_b_entrypoint(){
         let contract = declare("aa_experiment::AA").unwrap().contract_class();
         // put calldata of constructor
-        let constructor_calldata = array![1, 2, 3];
+        let constructor_calldata = array![3, 1, 2, 3, 2];
 
         // deploy AA and get address
         let (contract_address, _) = contract

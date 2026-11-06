@@ -94,8 +94,6 @@ use starknet::event::EventEmitter;
 
     #[constructor]
     fn constructor(ref self: ContractState, pub_keys: Array<felt252>, threshold: u32){
-
-        
         assert!(pub_keys.len() >= threshold && threshold > 0, "Invalid threshold or public keys length");
         for pub_key in pub_keys {
             self.public_keys.entry(pub_key).write(true);

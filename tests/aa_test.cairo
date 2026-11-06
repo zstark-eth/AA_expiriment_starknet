@@ -1,3 +1,5 @@
+use snforge_std::cheatcodes::execution_info::contract_address;
+
 #[cfg(test)]
 mod tests{
     use snforge_std::start_cheat_signature;
@@ -375,8 +377,29 @@ mod tests{
         start_cheat_signature(contract_address, fake_signature);
         account.__validate__(array![call]);
     }
-   
-   
+
+    #[test]
+    fn test_checking_multisig() {
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        // put calldata of constructor, first element is len of array [1, 2, 3, 4]
+        let constructor_calldata = array![4, 1, 2, 3, 4, 4];
+
+        // deploy AA and get address
+        let (contract_address, _) = contract
+            .deploy(@constructor_calldata)
+            .unwrap();
+
+        // create dispatcher
+        let dispatcher = IAccountManagementDispatcher {
+            contract_address,
+        };
+
+        assert!(dispatcher.get_public_keys(1), "There isn't this key in multisig allow");
+        assert!(dispatcher.get_public_keys(2), "There isn't this key in multisig allow");
+        assert!(dispatcher.get_public_keys(3), "There isn't this key in multisig allow");
+        assert!(dispatcher.get_public_keys(4), "There isn't this key in multisig allow");
+        assert!(dispatcher.get_threshold() == 4, "must be 4");
+    }
 
    
 

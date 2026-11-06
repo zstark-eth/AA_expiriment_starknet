@@ -48,12 +48,15 @@ use starknet::{ContractAddress, get_caller_address, get_contract_address, get_bl
        fn replace_owner(ref self: TState, old_pub_key: felt252, new_pub_key: felt252);
        fn get_session_key(self: @TState, key: felt252) -> SessionKey;
        fn get_allowed_entrypoints(self: @TState, key: felt252) -> Array<SessionEntrypoint>;
+       fn get_threshold(self: @TState) -> u32;
+       fn get_public_keys(self: @TState, key: felt252) -> bool;
     }
 
 #[starknet::contract(account)]
 pub mod AA {
+    use starknet::storage::StorageMapReadAccess;
     use starknet::storage::StorageMapWriteAccess;
-use starknet::event::EventEmitter;
+    use starknet::event::EventEmitter;
     use starknet::SyscallResultTrait;
     use starknet::syscalls::call_contract_syscall;
     use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
@@ -66,13 +69,12 @@ use starknet::event::EventEmitter;
 
     #[storage]
     struct Storage {
-        public_keys: Map<felt252, bool>,
-        threshold: u32,
-        guardians: Map<ContractAddress, bool>,
+       pub public_keys: Map<felt252, bool>,
+       pub threshold: u32,
+       pub guardians: Map<ContractAddress, bool>,
        pub session_keys: Map<felt252, SessionKey>,
        pub session_entrypoints: Map<(felt252, u32), SessionEntrypoint>,
-       spending_policies: Map<(felt252, ContractAddress), SpendingPolicy>
-
+       pub spending_policies: Map<(felt252, ContractAddress), SpendingPolicy>
     }
 
     #[event]
@@ -301,6 +303,13 @@ use starknet::event::EventEmitter;
             return my_array;
          }
 
+         fn get_threshold(self: @ContractState) -> u32{
+            self.threshold.read()
+         }
+
+         fn get_public_keys(self: @ContractState, key: felt252) -> bool {
+            self.public_keys.entry(key).read()
+         }
 
 
 

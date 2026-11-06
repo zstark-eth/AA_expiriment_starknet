@@ -1,6 +1,5 @@
 use starknet::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp};
 
-
 #[derive(Drop, Serde, Copy, starknet::Store)]
     pub struct SessionKey{
         pub expires_at: u64,
@@ -28,9 +27,9 @@ use starknet::{ContractAddress, get_caller_address, get_contract_address, get_bl
 
 #[derive(Drop, Serde)]
     pub struct Call{
-        to: ContractAddress,
-        selector: felt252,
-        calldata: Array<felt252>
+        pub to: ContractAddress,
+        pub selector: felt252,
+        pub calldata: Array<felt252>
     }
 
 #[starknet::interface]
@@ -53,7 +52,8 @@ use starknet::{ContractAddress, get_caller_address, get_contract_address, get_bl
 
 #[starknet::contract(account)]
 pub mod AA {
-    use starknet::event::EventEmitter;
+    use starknet::storage::StorageMapWriteAccess;
+use starknet::event::EventEmitter;
     use starknet::SyscallResultTrait;
     use starknet::syscalls::call_contract_syscall;
     use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
@@ -93,12 +93,14 @@ pub mod AA {
     }
 
     #[constructor]
-    fn constructor(ref self: ContractState, pub_key_0: felt252, pub_key_1: felt252, pub_key_2: felt252){
-        self.public_keys.entry(pub_key_0).write(true);
-        self.public_keys.entry(pub_key_1).write(true);
-        self.public_keys.entry(pub_key_2).write(true);
-        self.threshold.write(2);
+    fn constructor(ref self: ContractState, pub_keys: Array<felt252>, threshold: u32){
 
+        
+        assert!(pub_keys.len() >= threshold && threshold > 0, "Invalid threshold or public keys length");
+        for pub_key in pub_keys {
+            self.public_keys.entry(pub_key).write(true);
+        }
+        self.threshold.write(threshold);
     }
 
     fn count_valid_signatures(self: @ContractState, hash: felt252, signature: Span<felt252>) -> u32 {
@@ -169,27 +171,27 @@ pub mod AA {
             let r = *signature.at(1);
             let s = *signature.at(2);
             let mut session_key: SessionKey = self.session_keys.entry(key_felt).read();
-            
-           // let zero_address: ContractAddress = Zero::zero();
+
             assert!(session_key.expires_at > get_block_timestamp(), "Session key expired");
             assert!(session_key.max_calls > session_key.calls_used, "max_calls expired");
-            let this_contract = get_contract_address();
-            
+
+            let this_contract = get_contract_address();            
+            let len =  session_key.allowed_entrypoints_len;
             for call in calls.span() {
-                let len =  self.session_keys.entry(key_felt).allowed_entrypoints_len.read();
                 let mut is_allowed = false;
                 let mut i = 0;
                 assert!(*call.to != this_contract, "session keys can't manage itself");
 
                 while(i < len) {
-                    if(self.session_entrypoints.entry((key_felt, i)).selector.read() == *call.selector) {
+                    if(self.session_entrypoints.entry((key_felt, i)).selector.read() == *call.selector &&
+                    self.session_entrypoints.entry((key_felt, i)).target_contract.read() == *call.to) {
                         is_allowed = true;
                         break;
                     }else{
                         i += 1;
                     }
                 }
-                assert!(is_allowed == true, "selector isn't allowed");
+                assert!(is_allowed == true, "entrypoint isn't allowed");
             }
  
             

@@ -50,6 +50,7 @@ use starknet::{ContractAddress, get_caller_address, get_contract_address, get_bl
        fn get_allowed_entrypoints(self: @TState, key: felt252) -> Array<SessionEntrypoint>;
        fn get_threshold(self: @TState) -> u32;
        fn get_public_keys(self: @TState, key: felt252) -> bool;
+       fn get_public_keys_arr(self: @TState) -> Array<felt252>;
     }
 
 #[starknet::contract(account)]
@@ -70,6 +71,7 @@ pub mod AA {
     #[storage]
     struct Storage {
        pub public_keys: Map<felt252, bool>,
+       pub pub_keys_vec: Vec<felt252>,
        pub threshold: u32,
        pub guardians: Map<ContractAddress, bool>,
        pub session_keys: Map<felt252, SessionKey>,
@@ -97,8 +99,12 @@ pub mod AA {
     #[constructor]
     fn constructor(ref self: ContractState, pub_keys: Array<felt252>, threshold: u32){
         assert!(pub_keys.len() >= threshold && threshold > 0, "Invalid threshold or public keys length");
+
         for pub_key in pub_keys {
+            assert!(pub_key != 0, "Public key cannot be zero");
+            assert!(!self.public_keys.entry(pub_key).read(), "this pub key already added");
             self.public_keys.entry(pub_key).write(true);
+            self.pub_keys_vec.push(pub_key);
         }
         self.threshold.write(threshold);
     }
@@ -118,7 +124,7 @@ pub mod AA {
             // Increment index early to prevent infinite loops on skipped iterations
             i += 3;
 
-            // Verify if the extracted address is a registered owner
+            // Verify if the extracted pub_key is a registered owner
             if !self.public_keys.entry(pub_key).read() {
                 continue;
             }
@@ -151,7 +157,6 @@ pub mod AA {
 
     #[abi(embed_v0)]
     impl Account of super::IAccount<ContractState>{
-
         fn __validate__(ref self: ContractState, calls: Array<Call>) -> felt252 {
             let tx_info = starknet::get_tx_info().unbox();
             let tx_hash = tx_info.transaction_hash;
@@ -279,9 +284,21 @@ pub mod AA {
 
         fn replace_owner(ref self: ContractState, old_pub_key: felt252, new_pub_key: felt252){
             assert!(self.guardians.entry(get_caller_address()).read(), "Only guardians can call this fn");
+            assert!(new_pub_key != 0, "New public key cannot be 0");
             assert!(self.public_keys.entry(old_pub_key).read(), "old owner is not on owners");
             assert!(!self.public_keys.entry(new_pub_key).read(), "new_owner is already on owners");
-            assert!(new_pub_key != 0, "New public key cannot be 0");
+            let keys_len = self.pub_keys_vec.len();
+            let mut found: bool = false;
+            let mut i: u64 = 0;
+            while  i < keys_len{
+                if(self.pub_keys_vec.at(i).read() == old_pub_key){
+                    found = true;
+                    break;
+                }
+                i += 1
+            }
+            assert!(found, "old pub key must be founded");
+            self.pub_keys_vec.at(i).write(new_pub_key);
             self.public_keys.entry(old_pub_key).write(false);
             self.public_keys.entry(new_pub_key).write(true);
             self.emit(OwnerRemoved { pub_key: old_pub_key });
@@ -292,7 +309,7 @@ pub mod AA {
              self.session_keys.entry(key).read() 
         }
 
-        fn get_allowed_entrypoints(self: @ContractState, key: felt252) -> Array<SessionEntrypoint> {
+         fn get_allowed_entrypoints(self: @ContractState, key: felt252) -> Array<SessionEntrypoint> {
             let mut my_array = ArrayTrait::new();
             let len = self.session_keys.entry(key).allowed_entrypoints_len.read();
             let mut i = 0;
@@ -310,6 +327,23 @@ pub mod AA {
          fn get_public_keys(self: @ContractState, key: felt252) -> bool {
             self.public_keys.entry(key).read()
          }
+
+         fn get_public_keys_arr(self: @ContractState) -> Array<felt252>{
+            let mut result: Array<felt252> = ArrayTrait::new();
+            let len = self.pub_keys_vec.len();
+            
+            let mut i: u64 = 0;
+            while i < len {
+
+                let val = self.pub_keys_vec.at(i).read();
+                result.append(val);
+                i += 1;
+            };
+
+            result
+         }
+
+
 
 
 

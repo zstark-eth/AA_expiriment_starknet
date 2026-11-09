@@ -13,7 +13,7 @@ use starknet::{ContractAddress, get_caller_address, get_contract_address, get_bl
        pub target_contract: ContractAddress, // contract that we call, for example - USDC
        pub selector: felt252, // selector of contract that we call, for example - transfer
     }
-
+    
 #[derive(Drop, Serde, Copy, starknet::Store)]
     pub struct SpendingPolicy{
         is_configured: bool,
@@ -157,7 +157,9 @@ pub mod AA {
 
     #[abi(embed_v0)]
     impl Account of super::IAccount<ContractState>{
+    
         fn __validate__(ref self: ContractState, calls: Array<Call>) -> felt252 {
+            assert!(calls.len() > 0, "Empty calls array");
             let tx_info = starknet::get_tx_info().unbox();
             let tx_hash = tx_info.transaction_hash;
             let signature = tx_info.signature;
@@ -168,8 +170,8 @@ pub mod AA {
             if(valid_count >= self.threshold.read()){
                 return starknet::VALIDATED;
             }
-
-            assert!(signature.len() >= 3, "Invalid signature length");
+            
+            assert!(signature.len() == 3, "Invalid signature length");
 
             //session_key
             let key_felt = *signature.at(0);
@@ -181,7 +183,7 @@ pub mod AA {
             assert!(session_key.max_calls > session_key.calls_used, "max_calls expired");
 
             let this_contract = get_contract_address();            
-            let len =  session_key.allowed_entrypoints_len;
+            let len = session_key.allowed_entrypoints_len;
             for call in calls.span() {
                 let mut is_allowed = false;
                 let mut i = 0;
@@ -250,12 +252,16 @@ pub mod AA {
 
         fn add_session_key(ref self: ContractState, key: felt252, expires_at: u64, max_calls: u32, allowed_entrypoints: Array<SessionEntrypoint>){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
+            assert!(get_block_timestamp() < expires_at, "expires_at must be bigger than actual block timestemp");
+            assert!(expires_at % 3600 == 0, "expires_at must be a multiple of 3600");
+            assert!(max_calls > 0, "max_calls must be greater than zero");
+            assert!(allowed_entrypoints.len() > 0, "allowed_entrypoints must not be empty");
+            
             let new_entrypoints_len = allowed_entrypoints.len();
             let old_entrypoints_len = self.session_keys.entry(key).allowed_entrypoints_len.read();
             let mut i = 0;
 
          if(new_entrypoints_len < old_entrypoints_len){
-             
              for j in new_entrypoints_len..old_entrypoints_len{
                 let entrypoint_nullifier = SessionEntrypoint { target_contract: Zero::zero(), selector: 0};
                 self.session_entrypoints.entry((key, j)).write(entrypoint_nullifier);

@@ -789,9 +789,51 @@ mod tests{
 
      }
 
-    #[should_panic(expected: "Invalid signature length")]
+    #[should_panic(expected: "signature len must be a multiple of 3")]
     #[test]
     fn test_checking_signature_len(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+
+        // creating pair where 1234567 is testing private key, not real
+        let key_pair =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+
+        //getting its public key, hash and start cheating
+        let key_felt = key_pair.public_key;
+        let tx_hash = 0x123456;
+        let (r, s) = key_pair.sign(tx_hash).unwrap();
+        
+        // put calldata of constructor
+        let constructor_calldata = array![1, key_felt, 1];
+
+        // deploy AA and get address
+        let (contract_address, _) = contract
+            .deploy(@constructor_calldata)
+            .unwrap();
+
+        let account = IAccountDispatcher { contract_address:  contract_address};
+
+        // random value
+        let extra_value = 04920832084;
+
+        let usdc: ContractAddress = 0x12345;
+
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
+
+        let signature = array![key_felt, r, s, extra_value].span();
+
+        start_cheat_transaction_hash(contract_address, tx_hash);
+
+        start_cheat_signature(contract_address, signature);
+        account.__validate__(array![call]);
+        
+        stop_cheat_signature(contract_address);
+        stop_cheat_transaction_hash(contract_address);
+    }
+
+    #[should_panic(expected: "signature len must be a multiple of 3")]
+    #[test]
+    fn test_checking_signature_len_2(){
         let contract = declare("aa_experiment::AA").unwrap().contract_class();
         // put calldata of constructor
         let constructor_calldata = array![3, 1, 2, 3, 2];
@@ -817,15 +859,12 @@ mod tests{
         let tx_hash = 0x123456;
         let (r, s) = key_pair.sign(tx_hash).unwrap();
 
-        // random value
-        let extra_value = 04920832084;
-
         let usdc: ContractAddress = 0x12345;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
 
         let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
 
-        let signature = array![key_felt, r, s, extra_value].span();
+        let signature = array![key_felt, r].span();
 
         start_cheat_caller_address(contract_address, contract_address);
         dispatcher.add_session_key(key_felt, 7200, 3, array![session_contract_a]);
@@ -927,54 +966,6 @@ mod tests{
         start_cheat_signature(contract_address, signature);
 
         account.__validate__(array![call]);
-    }
-
-    #[should_panic(expected: "Invalid signature length")]
-    #[test]
-    fn test_checking_signature_len_2(){
-        let contract = declare("aa_experiment::AA").unwrap().contract_class();
-        // put calldata of constructor
-        let constructor_calldata = array![3, 1, 2, 3, 2];
-
-        // deploy AA and get address
-        let (contract_address, _) = contract
-            .deploy(@constructor_calldata)
-            .unwrap();
-                
-        // create dispatcher
-        let dispatcher = IAccountManagementDispatcher {
-            contract_address,
-        }; 
-
-        let account = IAccountDispatcher { contract_address:  contract_address};
-        
-        // creating pair where 1234567 is testing private key, not real
-        let key_pair =
-        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
-
-        //getting its public key, hash and start cheating
-        let key_felt = key_pair.public_key;
-        let tx_hash = 0x123456;
-        let (r, s) = key_pair.sign(tx_hash).unwrap();
-
-        let usdc: ContractAddress = 0x12345;
-        let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
-
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
-
-        let signature = array![key_felt, r].span();
-
-        start_cheat_caller_address(contract_address, contract_address);
-        dispatcher.add_session_key(key_felt, 7200, 3, array![session_contract_a]);
-        stop_cheat_caller_address(contract_address);
-
-        start_cheat_transaction_hash(contract_address, tx_hash);
-
-        start_cheat_signature(contract_address, signature);
-        account.__validate__(array![call]);
-        
-        stop_cheat_signature(contract_address);
-        stop_cheat_transaction_hash(contract_address);
     }
   
     #[feature("safe_dispatcher")]
@@ -1167,6 +1158,40 @@ mod tests{
       
     }
 
-    
+    #[should_panic(expected: "owner can't get session keys")]
+    #[test]
+    fn test_add_session_key_rejects_owner_key(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+
+        // creating pair where 1234567 is testing private key, not real
+        let key_pair =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+
+        //getting its public key, hash and start cheating
+        let key_felt = key_pair.public_key;
+        let tx_hash = 0x123456;
+        let (r, s) = key_pair.sign(tx_hash).unwrap();
+        
+        // put calldata of constructor
+        let constructor_calldata = array![1, key_felt, 1];
+
+
+        // deploy AA and get address
+        let (contract_address, _) = contract
+            .deploy(@constructor_calldata)
+            .unwrap();
+            
+        // create dispatcher
+        let dispatcher = IAccountManagementDispatcher {
+            contract_address,
+        }; 
+
+        let usdc: ContractAddress = 0x12345;
+        let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
+
+        start_cheat_caller_address(contract_address, contract_address);
+        dispatcher.add_session_key(key_felt, 7200, 4, array![session_contract_a]);
+        
+    }
  
 }

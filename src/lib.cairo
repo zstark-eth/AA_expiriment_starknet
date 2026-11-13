@@ -1,3 +1,4 @@
+//use openzeppelin_account::utils::signature;
 use starknet::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp};
 
 #[derive(Drop, Serde, Copy, starknet::Store)]
@@ -16,13 +17,13 @@ use starknet::{ContractAddress, get_caller_address, get_contract_address, get_bl
     
 #[derive(Drop, Serde, Copy, starknet::Store)]
     pub struct SpendingPolicy{
-        is_configured: bool,
-        max_per_call: u256,  // max amount per a call
-        max_per_transaction: u256, // max amount of all transfers of this token in batch
-        max_per_window: u256, // 
-        window_seconds: u64,
-        window_start: u64,
-        spent_in_window: u256
+        pub is_configured: bool,
+        pub max_per_call: u256,  // max amount per a call
+        pub max_per_transaction: u256, // max amount of all transfers of this token in batch
+        pub max_per_window: u256, // 
+        pub window_seconds: u64,
+        pub window_start: u64,
+        pub spent_in_window: u256
     }
 
 #[derive(Drop, Serde)]
@@ -51,12 +52,15 @@ use starknet::{ContractAddress, get_caller_address, get_contract_address, get_bl
        fn get_threshold(self: @TState) -> u32;
        fn get_public_keys(self: @TState, key: felt252) -> bool;
        fn get_public_keys_arr(self: @TState) -> Array<felt252>;
+       
+       fn set_spending_policy(ref self: TState, session_key: felt252, token: ContractAddress, max_per_call: u256, max_per_transaction: u256, 
+       max_per_window: u256, window_seconds: u64);
+       fn get_spending_policy(self: @TState, session_key: felt252, token: ContractAddress) -> SpendingPolicy;
+       fn remove_spending_policy(ref self: TState, session_key: felt252, token: ContractAddress);
     }
 
 #[starknet::contract(account)]
 pub mod AA {
-    use starknet::storage::StorageMapReadAccess;
-    use starknet::storage::StorageMapWriteAccess;
     use starknet::event::EventEmitter;
     use starknet::SyscallResultTrait;
     use starknet::syscalls::call_contract_syscall;
@@ -76,7 +80,7 @@ pub mod AA {
        pub guardians: Map<ContractAddress, bool>,
        pub session_keys: Map<felt252, SessionKey>,
        pub session_entrypoints: Map<(felt252, u32), SessionEntrypoint>,
-       pub spending_policies: Map<(felt252, ContractAddress), SpendingPolicy>
+       pub spending_policies: Map<(felt252, ContractAddress), SpendingPolicy>,
     }
 
     #[event]
@@ -110,6 +114,7 @@ pub mod AA {
     }
 
     fn count_valid_signatures(self: @ContractState, hash: felt252, signature: Span<felt252>) -> u32 {
+        assert!(signature.len() % 3 == 0, "signature len must be a multiple of 3");
         let mut valid_count = 0;
         let mut i = 0;
 
@@ -153,6 +158,123 @@ pub mod AA {
         }
 
         return valid_count;
+    }
+
+    fn extract_spending_amount(call: @Call) -> u256 {
+        let selector = *call.selector;
+    
+        let amount_index = if selector == selector!("transfer") {
+            1
+        } else { assert!(selector == selector!("transfer_from"), "Unsupported spending selector" );
+            2
+        };
+    
+        let calldata = call.calldata.span();
+    
+        assert!(calldata.len() > amount_index + 1, "Spending: calldata too short");
+    
+        let amount_low: u128 = match (*calldata.at(amount_index)).try_into() {
+            Option::Some(value) => value,
+            Option::None => {
+                panic!("Spending: invalid amount");
+                0
+            }
+        };
+    
+        let amount_high: u128 = match (*calldata.at(amount_index + 1)).try_into() {
+            Option::Some(value) => value,
+            Option::None => {
+                panic!("Spending: invalid amount");
+                0
+            }
+        };
+    
+        u256 {
+            low: amount_low,
+            high: amount_high
+        }
+    }
+
+    fn check_and_update_spending(ref self: ContractState, session_key: felt252, calls: Span<Call>) {
+        let now = get_block_timestamp();
+    
+        let mut i: u32 = 0;
+    
+        while i < calls.len() {
+            let call = calls.at(i);
+    
+            let token = *call.to;
+            let selector = *call.selector;
+    
+            let is_transfer = selector == selector!("transfer")||selector == selector!("transfer_from");
+    
+            let is_approval = selector == selector!("approve")||selector == selector!("increase_allowance");
+    
+            if is_approval {
+                let policy = self.spending_policies.entry((session_key, token)).read();
+    
+                assert!(!policy.is_configured, "Spending: allowance operations disabled");
+            }
+    
+            if is_transfer {
+                let mut policy = self.spending_policies.entry((session_key, token)).read();
+    
+                if policy.is_configured {
+                    let mut already_processed = false;
+                    let mut previous_index: u32 = 0;
+    
+                    while previous_index < i {
+                        let previous_call = calls.at(previous_index);
+                        let previous_selector = *previous_call.selector;
+    
+                        let previous_is_transfer = previous_selector == selector!("transfer") ||
+                            previous_selector == selector!("transfer_from");
+    
+                        if *previous_call.to == token && previous_is_transfer {
+                            already_processed = true;
+                            break;
+                        }
+                        previous_index += 1;
+                    }
+    
+                    if !already_processed {
+                        let mut transaction_total: u256 = 0;
+                        let mut j: u32 = 0;
+    
+                        while j < calls.len() {
+                            let current_call = calls.at(j);
+                            let current_selector = *current_call.selector;
+    
+                            let current_is_transfer = current_selector == selector!("transfer") ||
+                                current_selector == selector!("transfer_from");
+    
+                            if (*current_call.to == token && current_is_transfer) {
+                                let amount = extract_spending_amount(current_call);
+                                assert!(amount <= policy.max_per_call, "Spending: exceeds per-call limit");
+                                assert!(amount <= policy.max_per_transaction - transaction_total, "Spending: exceeds transaction limit");
+                                transaction_total += amount;
+                            }
+                            j += 1;
+                        }
+    
+                        if now >= policy.window_start && now - policy.window_start >= policy.window_seconds {
+                            policy.spent_in_window = 0;
+                            policy.window_start = now;
+                        }
+    
+                        assert!(policy.spent_in_window <= policy.max_per_window, "Spending: invalid window state");
+    
+                        assert!(transaction_total <= policy.max_per_window - policy.spent_in_window, "Spending: exceeds window limit");
+    
+                        policy.spent_in_window += transaction_total;
+    
+                        self.spending_policies.entry((session_key, token)).write(policy);
+                    }
+                }
+            }
+    
+            i += 1;
+        }
     }
 
     #[abi(embed_v0)]
@@ -213,11 +335,19 @@ pub mod AA {
         }
 
         fn __execute__(ref self: ContractState, calls: Array<Call>) -> Array<Span<felt252>> {
-            let zero_address: ContractAddress = Zero::zero();
-            assert!(starknet::get_caller_address() == zero_address, "Only self call allowed");
+            assert!(starknet::get_caller_address() == Zero::zero(), "Only self call allowed");
+            let tx_info = starknet::get_tx_info().unbox();
+            let signature = tx_info.signature;
+                if(signature.len() == 3){
+                    let key_felt = *signature.at(0);
+                    let is_owner = self.public_keys.entry(key_felt).read();
+                    if(!is_owner) {
+                        check_and_update_spending(ref self, key_felt, calls.span());
+                    }
+                }
             let mut results: Array<Span<felt252>> = ArrayTrait::new();
+            
            for call in calls{
-                
                 let res = starknet::syscalls::call_contract_syscall(
                      call.to,
                      call.selector, 
@@ -240,33 +370,34 @@ pub mod AA {
     #[abi(embed_v0)]
     impl AccountManagement of super::IAccountManagement<ContractState>{
 
-        fn add_guardian(ref self: ContractState, address: ContractAddress){
+         fn add_guardian(ref self: ContractState, address: ContractAddress){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
             self.guardians.entry(address).write(true);
         }
 
-        fn remove_guardian(ref self: ContractState, address: ContractAddress){
+         fn remove_guardian(ref self: ContractState, address: ContractAddress){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
             self.guardians.entry(address).write(false);
         }
 
-        fn add_session_key(ref self: ContractState, key: felt252, expires_at: u64, max_calls: u32, allowed_entrypoints: Array<SessionEntrypoint>){
+         fn add_session_key(ref self: ContractState, key: felt252, expires_at: u64, max_calls: u32, allowed_entrypoints: Array<SessionEntrypoint>){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
             assert!(get_block_timestamp() < expires_at, "expires_at must be bigger than actual block timestemp");
             assert!(expires_at % 3600 == 0, "expires_at must be a multiple of 3600");
             assert!(max_calls > 0, "max_calls must be greater than zero");
             assert!(allowed_entrypoints.len() > 0, "allowed_entrypoints must not be empty");
+            assert!(!self.public_keys.entry(key).read() , "owner can't get session keys");
             
             let new_entrypoints_len = allowed_entrypoints.len();
             let old_entrypoints_len = self.session_keys.entry(key).allowed_entrypoints_len.read();
             let mut i = 0;
 
-         if(new_entrypoints_len < old_entrypoints_len){
-             for j in new_entrypoints_len..old_entrypoints_len{
-                let entrypoint_nullifier = SessionEntrypoint { target_contract: Zero::zero(), selector: 0};
-                self.session_entrypoints.entry((key, j)).write(entrypoint_nullifier);
-            }
-         }
+             if(new_entrypoints_len < old_entrypoints_len){
+                 for j in new_entrypoints_len..old_entrypoints_len{
+                    let entrypoint_nullifier = SessionEntrypoint { target_contract: Zero::zero(), selector: 0};
+                    self.session_entrypoints.entry((key, j)).write(entrypoint_nullifier);
+                }
+             }
             for entrypoint in allowed_entrypoints{
                 let session_entrypoints = SessionEntrypoint { target_contract: entrypoint.target_contract, selector:  entrypoint.selector};
                 self.session_entrypoints.entry((key, i)).write(session_entrypoints);
@@ -277,7 +408,7 @@ pub mod AA {
             self.session_keys.entry(key).write(session_key);
         }
 
-        fn revoke_session_key(ref self: ContractState, key: felt252){
+         fn revoke_session_key(ref self: ContractState, key: felt252){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
             let entrypoint_len = self.session_keys.entry(key).allowed_entrypoints_len.read();
             for i in 0..entrypoint_len{
@@ -288,7 +419,7 @@ pub mod AA {
             self.session_keys.entry(key).write(session_key);
         }
 
-        fn replace_owner(ref self: ContractState, old_pub_key: felt252, new_pub_key: felt252){
+         fn replace_owner(ref self: ContractState, old_pub_key: felt252, new_pub_key: felt252){
             assert!(self.guardians.entry(get_caller_address()).read(), "Only guardians can call this fn");
             assert!(new_pub_key != 0, "New public key cannot be 0");
             assert!(self.public_keys.entry(old_pub_key).read(), "old owner is not on owners");
@@ -311,7 +442,7 @@ pub mod AA {
             self.emit(OwnerAdded{pub_key: new_pub_key});
         }
 
-        fn get_session_key(self: @ContractState, key: felt252) -> SessionKey{
+         fn get_session_key(self: @ContractState, key: felt252) -> SessionKey{
              self.session_keys.entry(key).read() 
         }
 
@@ -349,10 +480,30 @@ pub mod AA {
             result
          }
 
+         fn set_spending_policy(ref self: ContractState, session_key: felt252, token: ContractAddress, 
+          max_per_call: u256, max_per_transaction: u256, max_per_window: u256, window_seconds: u64){
+            assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
+            let session_key_info =  self.session_keys.entry(session_key).read();
+            assert!(session_key_info.expires_at > get_block_timestamp(), "Session key expired");
+            assert!(session_key_info.max_calls > session_key_info.calls_used, "Session key already used");
+            assert!(token != Zero::zero(), "Invalid token address");
+            assert!(window_seconds > 0, "window seconds must be greater zero");
+            let new_spending_policy = SpendingPolicy { is_configured: true, max_per_call: max_per_call, max_per_transaction: max_per_transaction,
+            max_per_window: max_per_window, window_seconds: window_seconds, window_start: get_block_timestamp(), spent_in_window: 0 };
+            self.spending_policies.entry((session_key, token)).write(new_spending_policy);
+         }
 
+         fn get_spending_policy(self: @ContractState, session_key: felt252, token: ContractAddress) -> SpendingPolicy{
+            self.spending_policies.entry((session_key, token)).read()
+         }
 
-
-
+         fn remove_spending_policy(ref self: ContractState, session_key: felt252, token: ContractAddress){
+           assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
+           let new_spending_policy = SpendingPolicy { is_configured: false, max_per_call: 0, max_per_transaction: 0,
+           max_per_window: 0, window_seconds: 0, window_start: 0, spent_in_window: 0 };
+           self.spending_policies.entry((session_key, token)).write(new_spending_policy);
+         }
+         
     }
 
     

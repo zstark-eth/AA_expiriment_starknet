@@ -1,5 +1,6 @@
 //use openzeppelin_account::utils::signature;
 use starknet::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp};
+pub mod mock;
 
 #[derive(Drop, Serde, Copy, starknet::Store)]
     pub struct SessionKey{
@@ -177,7 +178,7 @@ pub mod AA {
             Option::Some(value) => value,
             Option::None => {
                 panic!("Spending: invalid amount");
-                0
+                 0
             }
         };
     
@@ -249,6 +250,11 @@ pub mod AA {
                                 current_selector == selector!("transfer_from");
     
                             if (*current_call.to == token && current_is_transfer) {
+                                if current_selector == selector!("transfer_from") {
+                                let felt_aa_address: felt252 = get_contract_address().into();
+                                assert!(current_call.calldata.len() >= 4, "Spending: transfer_from calldata too short");
+                                    assert!(*current_call.calldata.at(0) == felt_aa_address, "from must be self address in transfer from");
+                                }
                                 let amount = extract_spending_amount(current_call);
                                 assert!(amount <= policy.max_per_call, "Spending: exceeds per-call limit");
                                 assert!(amount <= policy.max_per_transaction - transaction_total, "Spending: exceeds transaction limit");

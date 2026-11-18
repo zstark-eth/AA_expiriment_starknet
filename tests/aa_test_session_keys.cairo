@@ -728,6 +728,7 @@ mod tests{
     #[feature("safe_dispatcher")]
     #[test]
     fn test_invalid_session_signature_does_not_increment_calls_used(){
+
         let contract = declare("aa_experiment::AA").unwrap().contract_class();
         // put calldata of constructor
         let constructor_calldata = array![3, 1, 2, 3, 2];
@@ -787,7 +788,7 @@ mod tests{
         assert!(dispatcher.get_session_key(key_felt).calls_used == 0 , "calls used must be zero");
 
 
-     }
+    }
 
     #[should_panic(expected: "signature len must be a multiple of 3")]
     #[test]

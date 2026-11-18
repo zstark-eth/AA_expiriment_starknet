@@ -11,7 +11,7 @@ mod test{
     use starknet::ContractAddress;
     use snforge_std::{start_cheat_transaction_hash, start_cheat_block_timestamp, stop_cheat_block_timestamp,
     ContractClassTrait, DeclareResultTrait, declare, start_cheat_caller_address, stop_cheat_caller_address, 
-    stop_cheat_signature, stop_cheat_transaction_hash};
+    stop_cheat_signature, stop_cheat_transaction_hash, start_cheat_transaction_version};
     use snforge_std::signature::KeyPairTrait;
     use snforge_std::signature::SignerTrait;
     use snforge_std::signature::stark_curve::{
@@ -355,7 +355,7 @@ mod test{
 
     }
 
-     #[test]
+    #[test]
     fn test_seccess_batch_of_token(){
         let contract = declare("aa_experiment::AA").unwrap().contract_class();
         let mock = declare("MockERC20").unwrap().contract_class();
@@ -406,6 +406,48 @@ mod test{
         assert!(usdc_policy.spent_in_window == 6000000, "USDC spending not recorded");
 
     }
+
+    #[should_panic(expected: "Unsupported transaction version")]
+    #[test]
+    fn test_execute_with_wrong_tx_version(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        // put calldata of constructor
+        let constructor_calldata = array![3, 1, 2, 3, 2];
+    
+        // deploy AA and get address
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+
+        // create dispatcher
+        let dispatcher = IAccountManagementDispatcher {contract_address,};
+        let account = IAccountDispatcher { contract_address:  contract_address};
+      
+        // creating pair where 1234567 is testing private key, not real
+        let key_pair = KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+    
+        //getting its public key, hash and start cheating
+        let key_felt = key_pair.public_key;
+        let tx_hash = 0x123456;
+        let (r, s) = key_pair.sign(tx_hash).unwrap();
+    
+        let session_contract_a = SessionEntrypoint{target_contract: 0x04043, selector: selector!("transfer")};
+
+        let call = Call { to: 0x04043, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0]};
+
+
+        let signature = array![key_felt, r, s].span();
+
+        start_cheat_caller_address(contract_address, contract_address);
+        dispatcher.add_session_key(key_felt, 36000, 4, array![session_contract_a]);
+        dispatcher.set_spending_policy(key_felt, 0x04043, 4000000, 8000000, 10000000, 10000);
+        stop_cheat_caller_address(contract_address);
+
+        start_cheat_transaction_hash(contract_address, tx_hash);
+        start_cheat_signature(contract_address, signature);
+        start_cheat_caller_address(contract_address, Zero::zero());
+        start_cheat_transaction_version(contract_address, 0);
+        account.__execute__(array![call]);
+    }
+
 
 
 

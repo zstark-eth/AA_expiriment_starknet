@@ -15,7 +15,8 @@ pub mod mock;
        pub target_contract: ContractAddress, // contract that we call, for example - USDC
        pub selector: felt252, // selector of contract that we call, for example - transfer
     }
-    
+
+
 #[derive(Drop, Serde, Copy, starknet::Store)]
     pub struct SpendingPolicy{
         pub is_configured: bool,
@@ -57,11 +58,13 @@ pub mod mock;
        fn set_spending_policy(ref self: TState, session_key: felt252, token: ContractAddress, max_per_call: u256, max_per_transaction: u256, 
        max_per_window: u256, window_seconds: u64);
        fn get_spending_policy(self: @TState, session_key: felt252, token: ContractAddress) -> SpendingPolicy;
+       fn get_policy_tokens(self: @TState, session_key: felt252) -> Array<ContractAddress>;
        fn remove_spending_policy(ref self: TState, session_key: felt252, token: ContractAddress);
     }
 
 #[starknet::contract(account)]
 pub mod AA {
+    use crate::IAccountManagement;
     use starknet::event::EventEmitter;
     use starknet::SyscallResultTrait;
     use starknet::syscalls::call_contract_syscall;
@@ -70,8 +73,12 @@ pub mod AA {
     use super::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp, SessionKey, SessionEntrypoint, SpendingPolicy};
     use core::ecdsa::check_ecdsa_signature;
     use super::Call;
-    use super::IAccountManagement;
     use core::num::traits::Zero;
+
+    #[starknet::storage_node]
+    pub struct PolicyTokenRegistry {
+        tokens: Vec<ContractAddress>,
+    }
 
     #[storage]
     struct Storage {
@@ -82,6 +89,7 @@ pub mod AA {
        pub session_keys: Map<felt252, SessionKey>,
        pub session_entrypoints: Map<(felt252, u32), SessionEntrypoint>,
        pub spending_policies: Map<(felt252, ContractAddress), SpendingPolicy>,
+       pub policy_tokens: Map<felt252, PolicyTokenRegistry>,
     }
 
     #[event]
@@ -283,10 +291,72 @@ pub mod AA {
         }
     }
 
+    // helpers for spending_policies
+    fn register_policy_token(ref self: ContractState, session_key: felt252, token: ContractAddress) {
+        let mut registry = self.policy_tokens.entry(session_key);
+
+        let len = registry.tokens.len();
+        let mut i: u64 = 0;
+
+        while i < len {
+            if registry.tokens.at(i).read() == token {
+                return;
+            }
+            i += 1;
+        }
+
+        registry.tokens.push(token);
+    }
+
+    fn unregister_policy_token(ref self: ContractState, session_key: felt252, token: ContractAddress) {
+        let mut registry = self.policy_tokens.entry(session_key);
+
+        let len = registry.tokens.len();
+        let mut i: u64 = 0;
+
+        while i < len {
+            if registry.tokens.at(i).read() == token {
+                let last_index = len - 1;
+
+                if i != last_index {
+                    let last_token = registry.tokens.at(last_index).read();
+                    registry.tokens.at(i).write(last_token);
+                }
+
+                let _removed = registry.tokens.pop();
+                return;
+            }
+            i += 1;
+        }
+    }
+
+    fn clear_spending_policies(ref self: ContractState, session_key: felt252) {
+        let mut registry = self.policy_tokens.entry(session_key);
+
+        while registry.tokens.len() > 0 {
+            let last_index = registry.tokens.len() - 1;
+            let token = registry.tokens.at(last_index).read();
+
+            let empty_policy = SpendingPolicy {
+                is_configured: false,
+                max_per_call: 0,
+                max_per_transaction: 0,
+                max_per_window: 0,
+                window_seconds: 0,
+                window_start: 0,
+                spent_in_window: 0
+            };
+
+            self.spending_policies.entry((session_key, token)).write(empty_policy);
+            let _removed = registry.tokens.pop();
+        }
+    }
+
     #[abi(embed_v0)]
     impl Account of super::IAccount<ContractState>{
     
         fn __validate__(ref self: ContractState, calls: Array<Call>) -> felt252 {
+            assert!(starknet::get_caller_address() == Zero::zero(), "Only protocol call allowed");
             assert!(calls.len() > 0, "Empty calls array");
             let tx_info = starknet::get_tx_info().unbox();
             let tx_hash = tx_info.transaction_hash;
@@ -303,6 +373,7 @@ pub mod AA {
 
             //session_key
             let key_felt = *signature.at(0);
+            assert!(!self.public_keys.entry(key_felt).read(), "owner key can't be used as session key");
             let r = *signature.at(1);
             let s = *signature.at(2);
             let mut session_key: SessionKey = self.session_keys.entry(key_felt).read();
@@ -341,8 +412,10 @@ pub mod AA {
         }
 
         fn __execute__(ref self: ContractState, calls: Array<Call>) -> Array<Span<felt252>> {
-            assert!(starknet::get_caller_address() == Zero::zero(), "Only self call allowed");
+            assert!(starknet::get_caller_address() == Zero::zero(), "Only protocol call allowed");
             let tx_info = starknet::get_tx_info().unbox();
+            let version = tx_info.version;
+            assert!(version != 0, "Unsupported transaction version");
             let signature = tx_info.signature;
                 if(signature.len() == 3){
                     let key_felt = *signature.at(0);
@@ -416,6 +489,7 @@ pub mod AA {
 
          fn revoke_session_key(ref self: ContractState, key: felt252){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
+            clear_spending_policies(ref self, key);
             let entrypoint_len = self.session_keys.entry(key).allowed_entrypoints_len.read();
             for i in 0..entrypoint_len{
                 let entrypoint_nullifier = SessionEntrypoint { target_contract: Zero::zero(), selector: 0 };
@@ -430,6 +504,7 @@ pub mod AA {
             assert!(new_pub_key != 0, "New public key cannot be 0");
             assert!(self.public_keys.entry(old_pub_key).read(), "old owner is not on owners");
             assert!(!self.public_keys.entry(new_pub_key).read(), "new_owner is already on owners");
+
             let keys_len = self.pub_keys_vec.len();
             let mut found: bool = false;
             let mut i: u64 = 0;
@@ -441,6 +516,25 @@ pub mod AA {
                 i += 1
             }
             assert!(found, "old pub key must be founded");
+
+            clear_spending_policies(ref self, new_pub_key);
+
+            // nullifying session entrypoints
+            let entrypoint_len = self.session_keys.entry(new_pub_key).allowed_entrypoints_len.read();
+            for i in 0..entrypoint_len {
+                let entrypoint_nullifier = SessionEntrypoint {
+                    target_contract: Zero::zero(),
+                    selector: 0
+                };
+
+                self.session_entrypoints.entry((new_pub_key, i)).write(entrypoint_nullifier);
+            }
+
+            // nullifying session keys
+            let session_key = SessionKey { expires_at: 0, max_calls: 0, calls_used: 0, allowed_entrypoints_len: 0};
+            self.session_keys.entry(new_pub_key).write(session_key);
+
+            // replacing owner
             self.pub_keys_vec.at(i).write(new_pub_key);
             self.public_keys.entry(old_pub_key).write(false);
             self.public_keys.entry(new_pub_key).write(true);
@@ -494,6 +588,7 @@ pub mod AA {
             assert!(session_key_info.max_calls > session_key_info.calls_used, "Session key already used");
             assert!(token != Zero::zero(), "Invalid token address");
             assert!(window_seconds > 0, "window seconds must be greater zero");
+            register_policy_token(ref self, session_key, token);
             let new_spending_policy = SpendingPolicy { is_configured: true, max_per_call: max_per_call, max_per_transaction: max_per_transaction,
             max_per_window: max_per_window, window_seconds: window_seconds, window_start: get_block_timestamp(), spent_in_window: 0 };
             self.spending_policies.entry((session_key, token)).write(new_spending_policy);
@@ -503,11 +598,27 @@ pub mod AA {
             self.spending_policies.entry((session_key, token)).read()
          }
 
+         fn get_policy_tokens(self: @ContractState, session_key: felt252) -> Array<ContractAddress>{
+            let registry = self.policy_tokens.entry(session_key);
+            let len = registry.tokens.len();
+
+            let mut result: Array<ContractAddress> = ArrayTrait::new();
+            let mut i: u64 = 0;
+
+            while i < len {
+                result.append(registry.tokens.at(i).read());
+                i += 1;
+            }
+
+            result
+         }
+
          fn remove_spending_policy(ref self: ContractState, session_key: felt252, token: ContractAddress){
            assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
            let new_spending_policy = SpendingPolicy { is_configured: false, max_per_call: 0, max_per_transaction: 0,
            max_per_window: 0, window_seconds: 0, window_start: 0, spent_in_window: 0 };
            self.spending_policies.entry((session_key, token)).write(new_spending_policy);
+           unregister_policy_token(ref self, session_key, token);
          }
          
     }

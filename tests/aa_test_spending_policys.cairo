@@ -448,6 +448,62 @@ mod test{
         account.__execute__(array![call]);
     }
 
+    #[test]
+    fn test_changing_and_removing_spending_policy(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        // put calldata of constructor
+        let constructor_calldata = array![3, 1, 2, 3, 2];
+    
+        // deploy AA and get address
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+
+        // create dispatcher
+        let dispatcher = IAccountManagementDispatcher {contract_address,};
+      
+        // creating pair where 1234567 is testing private key, not real
+        let key_pair = KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+    
+        //getting its public key, hash and start cheating
+        let key_felt = key_pair.public_key;
+        let usdc = 0x04043;
+        let dai = 0x04340;
+    
+        let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
+        let session_contract_b = SessionEntrypoint{target_contract: dai, selector: selector!("transfer")};
+
+        
+        start_cheat_caller_address(contract_address, contract_address);
+        dispatcher.add_session_key(key_felt, 36000, 4, array![session_contract_a, session_contract_b]);
+        dispatcher.set_spending_policy(key_felt, usdc, 10000000, 25000000, 50000000, 20000);
+        dispatcher.set_spending_policy(key_felt, dai, 10000000, 25000000, 50000000, 20000);
+        dispatcher.set_spending_policy(key_felt, usdc, 5000000, 20000000, 25000000, 25000); 
+        let tokens = dispatcher.get_policy_tokens(key_felt);
+        assert!(tokens.len() == 2, "must contain two tokens");
+        let first = *tokens.at(0);
+        let second = *tokens.at(1);
+        assert!((first == usdc && second == dai) || (first == dai && second == usdc), "must contain USDC and DAI exactly once");
+        dispatcher.remove_spending_policy(key_felt, usdc);
+        assert!(!dispatcher.get_spending_policy(key_felt, usdc).is_configured, "spending policy for usdc musn't be configured");
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).max_per_call == 0, "all targets of spending policy for usdc must be off");
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).max_per_transaction == 0, "all targets of spending policy for usdc must be off");
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).max_per_window == 0, "all targets of spending policy for usdc must be off");
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).window_seconds == 0, "all targets of spending policy for usdc must be off");
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).window_start == 0, "all targets of spending policy for usdc must be off");
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).spent_in_window == 0, "all targets of spending policy for usdc must be off");
+        assert!(dispatcher.get_spending_policy(key_felt, dai).is_configured, "spending policy for dai musn't have changed");
+        assert!(dispatcher.get_policy_tokens(key_felt).len() == 1 && *dispatcher.get_policy_tokens(key_felt).at(0) == dai, "policy tokens arr must have only 1 items and it must be dai");
+        dispatcher.set_spending_policy(key_felt, usdc, 1000000, 2000000, 3000000, 20000);
+        let tokens = dispatcher.get_policy_tokens(key_felt);
+        assert!(tokens.len() == 2, "must contain two tokens");
+        assert!((first == usdc && second == dai) || (first == dai && second == usdc), "must contain USDC and DAI exactly once");
+
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).is_configured, "spending policy for usdc must be configured");
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).max_per_call == 1000000, "all targets of spending policy for usdc must be on");
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).max_per_transaction == 2000000, "all targets of spending policy for usdc must be on");
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).max_per_window == 3000000, "all targets of spending policy for usdc must be on");
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).window_seconds == 20000, "all targets of spending policy for usdc must be on");
+        assert!(dispatcher.get_spending_policy(key_felt, usdc).spent_in_window == 0, "all targets of spending policy for usdc must be on");
+    }
 
 
 

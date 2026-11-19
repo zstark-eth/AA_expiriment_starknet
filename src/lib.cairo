@@ -489,6 +489,8 @@ pub mod AA {
 
          fn revoke_session_key(ref self: ContractState, key: felt252){
             assert!(get_caller_address() == get_contract_address(), "Only self call allowed");
+
+            // here we are nullifying spending_policies
             clear_spending_policies(ref self, key);
             let entrypoint_len = self.session_keys.entry(key).allowed_entrypoints_len.read();
             for i in 0..entrypoint_len{

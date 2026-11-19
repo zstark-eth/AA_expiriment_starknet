@@ -61,7 +61,7 @@ mod test{
         let usdc: ContractAddress = 0x12345;
         let random_address = 0x0092dc3ab2;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer_from")};
-        let call = Call { to: usdc, selector: selector!("transfer_from"), calldata: array![random_address, 0x02034, 6000000, 0] };
+        let call = Call { to: usdc, selector: selector!("transfer_from"), calldata: array![random_address, 0x02034, 6000000, 0].span() };
         let signature = array![key_felt, r, s].span();
 
         start_cheat_caller_address(contract_address, contract_address);
@@ -106,7 +106,7 @@ mod test{
     
         let usdc: ContractAddress = 0x12345;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0]};
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0].span()};
         let signature = array![key_felt, r, s].span();
 
         start_cheat_caller_address(contract_address, contract_address);
@@ -142,11 +142,11 @@ mod test{
         let key_felt = key_pair.public_key;
         let tx_hash = 0x123456;
         let (r, s) = key_pair.sign(tx_hash).unwrap();
-    
+        
         let usdc: ContractAddress = 0x12345;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
-        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0]};
-        let call_2 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0]};
+        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0].span()};
+        let call_2 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0].span()};
 
         let signature = array![key_felt, r, s].span();
 
@@ -188,8 +188,8 @@ mod test{
     
         let usdc: ContractAddress = mock_address;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
-        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0]};
-        let call_2 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0]};
+        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0].span()};
+        let call_2 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0].span()};
 
         let signature = array![key_felt, r, s].span();
 
@@ -231,8 +231,8 @@ mod test{
     
         let usdc: ContractAddress = mock_address;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
-        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0]};
-        let call_2 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0]};
+        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0].span()};
+        let call_2 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0].span()};
 
         let signature = array![key_felt, r, s].span();
 
@@ -279,7 +279,7 @@ mod test{
     
         let usdc: ContractAddress = mock_address;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("approve")};
-        let call_1 = Call { to: usdc, selector: selector!("approve"), calldata: array![0x02034, 60000000, 0]};
+        let call_1 = Call { to: usdc, selector: selector!("approve"), calldata: array![0x02034, 60000000, 0].span()};
 
         let signature = array![key_felt, r, s].span();
 
@@ -327,8 +327,8 @@ mod test{
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
         let session_contract_b = SessionEntrypoint{target_contract: dai, selector: selector!("transfer")};
 
-        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0]};
-        let call_2 = Call { to: dai, selector: selector!("transfer"), calldata: array![0x02034, 100000000, 0]};
+        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 6000000, 0].span()};
+        let call_2 = Call { to: dai, selector: selector!("transfer"), calldata: array![0x02034, 100000000, 0].span()};
 
 
         let signature = array![key_felt, r, s].span();
@@ -383,8 +383,8 @@ mod test{
     
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
 
-        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0]};
-        let call_2 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0]};
+        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0].span()};
+        let call_2 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0].span()};
 
 
         let signature = array![key_felt, r, s].span();
@@ -431,7 +431,7 @@ mod test{
     
         let session_contract_a = SessionEntrypoint{target_contract: 0x04043, selector: selector!("transfer")};
 
-        let call = Call { to: 0x04043, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0]};
+        let call = Call { to: 0x04043, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0].span()};
 
 
         let signature = array![key_felt, r, s].span();

@@ -34,6 +34,7 @@ mod tests{
         let constructor_calldata = array![3, 1, 2, 3, 2];
 
         let (_contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+
     }  
 
     #[test]
@@ -351,7 +352,7 @@ mod tests{
 
         let usdc: ContractAddress = 0x12345;
         let session_contract = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span()};
         let fake_signature = array![100, 1, 1].span();
 
         start_cheat_caller_address(contract_address, contract_address);
@@ -384,7 +385,7 @@ mod tests{
 
         let usdc: ContractAddress = 0x12345;
         let session_contract = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span()};
         let fake_signature = array![100, 1, 1].span();
 
         start_cheat_caller_address(contract_address, contract_address);
@@ -418,7 +419,7 @@ mod tests{
         let usdc: ContractAddress = 0x12345;
         let another_token: ContractAddress = 0x54321;
         let session_contract = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
-        let call = Call { to: another_token, selector: selector!("transfer"), calldata: array![] };
+        let call = Call { to: another_token, selector: selector!("transfer"), calldata: array![].span()};
         let fake_signature = array![100, 1, 1].span();
 
         start_cheat_caller_address(contract_address, contract_address);
@@ -454,7 +455,7 @@ mod tests{
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
         let session_contract_b = SessionEntrypoint{target_contract: dex, selector: selector!("swap")};
 
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span()};
         let fake_signature = array![200, 1, 1].span();
 
         start_cheat_caller_address(contract_address, contract_address);
@@ -491,7 +492,7 @@ mod tests{
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
         let session_contract_b = SessionEntrypoint{target_contract: dex, selector: selector!("swap")};
 
-        let call = Call { to: dex, selector: selector!("swap"), calldata: array![] };
+        let call = Call { to: dex, selector: selector!("swap"), calldata: array![].span()};
         let fake_signature = array![100, 1, 1].span();
 
         start_cheat_caller_address(contract_address, contract_address);
@@ -534,7 +535,7 @@ mod tests{
         let usdc: ContractAddress = 0x12345;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
 
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span() };
         let signature = array![key_felt, r, s].span();
 
         start_cheat_caller_address(contract_address, contract_address);
@@ -588,7 +589,7 @@ mod tests{
         let usdc: ContractAddress = 0x12345;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
 
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span()};
         let signature = array![key_felt, r, s].span();
         start_cheat_caller_address(contract_address, contract_address);
         dispatcher.add_session_key(key_felt, 7200, 4, array![session_contract_a]);
@@ -629,7 +630,7 @@ mod tests{
         let dai: ContractAddress = 0x154355;
         let session_contract_a = SessionEntrypoint{target_contract: dai, selector: selector!("approve")};
 
-        let call = Call { to: dai, selector: selector!("approve"), calldata: array![] };
+        let call = Call { to: dai, selector: selector!("approve"), calldata: array![].span()};
         let signature = array![key_felt, r, s].span();
 
         start_cheat_caller_address(contract_address, contract_address);
@@ -686,8 +687,8 @@ mod tests{
         let usdc: ContractAddress = 0x12345;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
 
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
-        let call_2 = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span()};
+        let call_2 = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span()};
 
         let signature = array![key_felt, r, s].span();
 
@@ -741,8 +742,8 @@ mod tests{
         let session_contract_b = SessionEntrypoint{target_contract: dex, selector: selector!("swap")};
 
 
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
-        let call_2 = Call { to: dex, selector: selector!("swap"), calldata: array![] };
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span()};
+        let call_2 = Call { to: dex, selector: selector!("swap"), calldata: array![].span()};
 
         let signature = array![key_felt, r, s].span();
 
@@ -801,8 +802,8 @@ mod tests{
         let session_contract_b = SessionEntrypoint{target_contract: dex, selector: selector!("swap")};
 
 
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
-        let call_2 = Call { to: dex, selector: selector!("swap"), calldata: array![] };
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span()};
+        let call_2 = Call { to: dex, selector: selector!("swap"), calldata: array![].span()};
 
         let signature = array![key_felt, r, s].span();
 
@@ -858,7 +859,7 @@ mod tests{
 
         let usdc: ContractAddress = 0x12345;
 
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span()};
 
         let signature = array![key_felt, r, s, extra_value].span();
 
@@ -903,7 +904,7 @@ mod tests{
         let usdc: ContractAddress = 0x12345;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
 
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span()};
 
         let signature = array![key_felt, r].span();
 
@@ -949,7 +950,7 @@ mod tests{
         let itself: ContractAddress = contract_address;
         let session_contract_a = SessionEntrypoint{target_contract: itself, selector: selector!("add_session_key")};
     
-        let call = Call { to: itself, selector: selector!("add_session_key"), calldata: array![] };
+        let call = Call { to: itself, selector: selector!("add_session_key"), calldata: array![].span()};
     
         let signature = array![key_felt, r, s].span();
     
@@ -992,7 +993,7 @@ mod tests{
         let dai: ContractAddress = 0x154355;
         let session_contract_a = SessionEntrypoint{target_contract: dai, selector: selector!("approve")};
     
-        let call = Call { to: dai, selector: selector!("approve"), calldata: array![] };
+        let call = Call { to: dai, selector: selector!("approve"), calldata: array![].span()};
         let signature = array![key_felt, r, s].span();
 
         start_cheat_caller_address(contract_address, contract_address);
@@ -1038,8 +1039,8 @@ mod tests{
         let dex: ContractAddress = 0x958983;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
 
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![] };
-        let call_2 = Call { to: dex, selector: selector!("deposit"), calldata: array![] };
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![].span()};
+        let call_2 = Call { to: dex, selector: selector!("deposit"), calldata: array![].span()};
 
         let signature = array![key_felt, r, s].span();
 

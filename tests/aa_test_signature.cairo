@@ -23,6 +23,8 @@ mod tests{
     use aa_experiment::IAccountDispatcherTrait;
     use aa_experiment::IAccountSafeDispatcher;
     use aa_experiment::IAccountSafeDispatcherTrait;
+    use aa_experiment::ISRC5Dispatcher;
+    use aa_experiment::ISRC5DispatcherTrait;
     use aa_experiment::SessionEntrypoint;
     use aa_experiment::Call;
     use aa_experiment::SessionKey;
@@ -208,8 +210,8 @@ mod tests{
         let tx_hash = 0x123456;
         let (r, s) = key_pair.sign(tx_hash).unwrap();
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0]};
-        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0]};
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0].span()};
+        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0].span()};
 
         let signature = array![key_felt, r, s].span();
 
@@ -265,8 +267,8 @@ mod tests{
         let tx_hash = 0x123456;
         let (r, s) = key_pair.sign(tx_hash).unwrap();
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};
-        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0]};
-        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0]};
+        let call = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0].span()};
+        let call_1 = Call { to: usdc, selector: selector!("transfer"), calldata: array![0x02034, 3000000, 0].span()};
 
         let signature = array![key_felt, r, s].span();
 
@@ -295,6 +297,55 @@ mod tests{
         assert!(mock_dispatcher_usdc.balance_of(contract_address) == 1000000, "balance of aa must be 1 USDC");
         assert!(mock_dispatcher_usdc.balance_of(0x02034) == 0, "balance of 0x02034 must be 0 USDC");
 
+    }
+
+    #[test]
+    fn test_checking_src_5(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let constructor_calldata = array![3, 1, 2, 3, 2];
+
+        let (_contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+
+        let dispatcher = ISRC5Dispatcher { contract_address: _contract_address};
+        assert!(dispatcher.supports_interface(0x3f918d17e5ee77373b56385708f855659a07f75997f365cf87748628532a055), "SRC-5 must be supported");
+        assert!(dispatcher.supports_interface(0x2ceccef7f994940b3962a6c67e0ba4fcd37df7d131417c604f91e03caecc1cd), "SRC-6 must be supported");
+        assert!(!dispatcher.supports_interface(0x92980948032ab3843874da9483284092804eb498493849389483984bdc345), "Unknown interface must not be supported");
+    }
+
+    #[test]
+    fn test_checking_multisig_with_is_valid_signature(){
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(2987235);
+
+        let key_felt_a = key_pair_a.public_key;
+        let key_felt_b = key_pair_b.public_key;
+       
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_felt_a, key_felt_b, 2];
+
+        // deploy AA and get address
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+
+        let account = IAccountDispatcher { contract_address:  contract_address};
+
+        let tx_hash = 0x123456;
+        let (r_a, s_a) = key_pair_a.sign(tx_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(tx_hash).unwrap();
+        let (r_wrong, s_wrong) = key_pair_b.sign(0x483782).unwrap();
+
+        
+
+        let signature = array![key_felt_a, r_a, s_a, key_felt_b, r_b, s_b];
+        let is_valid_sig = account.is_valid_signature(tx_hash, signature);
+        assert!(is_valid_sig == starknet::VALIDATED, "signature must be validated");
+        let wrong_valid = account.is_valid_signature(tx_hash, array![key_felt_a, r_a, s_a, key_felt_a, r_a, s_a]);
+        assert!(wrong_valid != starknet::VALIDATED, "wrong sig musn't be validated");
+        let wrong_valid_1 = account.is_valid_signature(tx_hash, array![key_felt_a, r_a, s_a, key_felt_b, r_wrong, s_wrong]);
+        assert!(wrong_valid_1 == 0, "wrong sig musn't be validated");
     }
 
 

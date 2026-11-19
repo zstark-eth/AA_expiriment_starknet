@@ -32,7 +32,13 @@ pub mod mock;
     pub struct Call{
         pub to: ContractAddress,
         pub selector: felt252,
-        pub calldata: Array<felt252>
+        pub calldata: Span<felt252>
+    }
+
+    // interfaces
+#[starknet::interface]
+    pub trait ISRC5<TState> {
+        fn supports_interface(self: @TState, interface_id: felt252) -> bool;
     }
 
 #[starknet::interface]
@@ -74,6 +80,10 @@ pub mod AA {
     use core::ecdsa::check_ecdsa_signature;
     use super::Call;
     use core::num::traits::Zero;
+
+    const SRC5_INTERFACE_ID: felt252 =
+    0x3f918d17e5ee77373b56385708f855659a07f75997f365cf87748628532a055;
+    const SRC6_INTERFACE_ID: felt252 = 0x2ceccef7f994940b3962a6c67e0ba4fcd37df7d131417c604f91e03caecc1cd;
 
     #[starknet::storage_node]
     pub struct PolicyTokenRegistry {
@@ -178,7 +188,7 @@ pub mod AA {
             2
         };
     
-        let calldata = call.calldata.span();
+        let calldata = call.calldata;
     
         assert!(calldata.len() > amount_index + 1, "Spending: calldata too short");
     
@@ -430,7 +440,7 @@ pub mod AA {
                 let res = starknet::syscalls::call_contract_syscall(
                      call.to,
                      call.selector, 
-                     call.calldata.span()).unwrap_syscall();
+                     call.calldata).unwrap_syscall();
             results.append(res);
            }
             return results;
@@ -624,6 +634,14 @@ pub mod AA {
          }
          
     }
+
+    #[abi(embed_v0)]
+    impl SRC5Impl of super::ISRC5<ContractState>{
+        fn supports_interface(self: @ContractState, interface_id: felt252) -> bool{
+            interface_id == SRC5_INTERFACE_ID || interface_id == SRC6_INTERFACE_ID
+        }
+    }
+
 
     
 }

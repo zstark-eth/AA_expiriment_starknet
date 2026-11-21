@@ -25,6 +25,8 @@ mod tests{
     use aa_experiment::IAccountSafeDispatcherTrait;
     use aa_experiment::ISRC5Dispatcher;
     use aa_experiment::ISRC5DispatcherTrait;
+    use aa_experiment::IOutsideExecutionV2Dispatcher;
+    use aa_experiment::IOutsideExecutionV2DispatcherTrait;
     use aa_experiment::SessionEntrypoint;
     use aa_experiment::Call;
     use aa_experiment::SessionKey;
@@ -346,6 +348,20 @@ mod tests{
         assert!(wrong_valid != starknet::VALIDATED, "wrong sig musn't be validated");
         let wrong_valid_1 = account.is_valid_signature(tx_hash, array![key_felt_a, r_a, s_a, key_felt_b, r_wrong, s_wrong]);
         assert!(wrong_valid_1 == 0, "wrong sig musn't be validated");
+    }
+
+    #[test]
+    fn test_unused_nonce_is_available(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        // put calldata of constructor
+        let constructor_calldata = array![2, 1, 2, 2];
+
+        // deploy AA and get address
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+
+        let dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+
+        assert!(dispatcher.is_valid_outside_execution_nonce(0x032342), "message");
     }
 
 

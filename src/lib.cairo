@@ -1,6 +1,16 @@
 //use openzeppelin_account::utils::signature;
 use starknet::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp};
 pub mod mock;
+use starknet::account::Call as StarknetCall;
+
+#[derive(Copy, Drop, Serde)]
+    pub struct OutsideExecution {
+        pub caller: ContractAddress, // who is allowed to send a transaction
+        pub nonce: felt252, // safe from reentracy
+        pub execute_after: u64,
+        pub execute_before: u64,
+        pub calls: Span<StarknetCall>
+    }
 
 #[derive(Drop, Serde, Copy, starknet::Store)]
     pub struct SessionKey{
@@ -22,7 +32,7 @@ pub mod mock;
         pub is_configured: bool,
         pub max_per_call: u256,  // max amount per a call
         pub max_per_transaction: u256, // max amount of all transfers of this token in batch
-        pub max_per_window: u256, // 
+        pub max_per_window: u256, 
         pub window_seconds: u64,
         pub window_start: u64,
         pub spent_in_window: u256
@@ -30,12 +40,19 @@ pub mod mock;
 
 #[derive(Drop, Serde)]
     pub struct Call{
-        pub to: ContractAddress,
-        pub selector: felt252,
-        pub calldata: Span<felt252>
+        pub to: ContractAddress, // to token, for example dai
+        pub selector: felt252, // what selector, for exemple - transfer
+        pub calldata: Span<felt252> // arguments for selector fn 
     }
 
     // interfaces
+#[starknet::interface]
+    pub trait IOutsideExecutionV2<TState>{
+        fn execute_from_outside_v2(ref self: TState, outside_execution: OutsideExecution, 
+            signature: Span<felt252>) -> Array<Span<felt252>>;
+        fn is_valid_outside_execution_nonce(self: @TState, nonce: felt252) -> bool;
+    }
+
 #[starknet::interface]
     pub trait ISRC5<TState> {
         fn supports_interface(self: @TState, interface_id: felt252) -> bool;
@@ -70,20 +87,27 @@ pub mod mock;
 
 #[starknet::contract(account)]
 pub mod AA {
-    use crate::IAccountManagement;
-    use starknet::event::EventEmitter;
+    use starknet::get_tx_info;
+use starknet::event::EventEmitter;
     use starknet::SyscallResultTrait;
-    use starknet::syscalls::call_contract_syscall;
+   // use starknet::syscalls::call_contract_syscall;
     use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
     StoragePointerWriteAccess, Vec, MutableVecTrait, VecTrait};
-    use super::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp, SessionKey, SessionEntrypoint, SpendingPolicy};
+    use super::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp,
+    SessionKey, SessionEntrypoint, SpendingPolicy, OutsideExecution, StarknetCall};
     use core::ecdsa::check_ecdsa_signature;
     use super::Call;
     use core::num::traits::Zero;
+    use core::poseidon::poseidon_hash_span;
+    use core::poseidon::PoseidonTrait;
 
-    const SRC5_INTERFACE_ID: felt252 =
-    0x3f918d17e5ee77373b56385708f855659a07f75997f365cf87748628532a055;
+    const SRC5_INTERFACE_ID: felt252 = 0x3f918d17e5ee77373b56385708f855659a07f75997f365cf87748628532a055;
     const SRC6_INTERFACE_ID: felt252 = 0x2ceccef7f994940b3962a6c67e0ba4fcd37df7d131417c604f91e03caecc1cd;
+    const SNIP9_V2_INTERFACE_ID: felt252 = 0x1d1144bb2138366ff28d8e9ab57456b1d332ac42196230c3a602003c89872;
+    const ANY_CALLER: felt252 = 0x414e595f43414c4c4552;
+    const CALL_TYPE_HASH: felt252 = 0x3635c7f2a7ba93844c0d064e18e487f35ab90f7c39d00f186a781fc3f0c2ca9;
+    const OUTSIDE_EXECUTION_TYPE_HASH: felt252 = 0x312b56c05a7965066ddbda31c016d8d05afc305071c0ca3cdc2192c3c2f1f0f;
+    const STARKNET_DOMAIN_TYPE_HASH: felt252 = 0x1ff2f602e42168014d405a94f75e8a93d640751d71d16311266e140d8b0a210;
 
     #[starknet::storage_node]
     pub struct PolicyTokenRegistry {
@@ -100,6 +124,7 @@ pub mod AA {
        pub session_entrypoints: Map<(felt252, u32), SessionEntrypoint>,
        pub spending_policies: Map<(felt252, ContractAddress), SpendingPolicy>,
        pub policy_tokens: Map<felt252, PolicyTokenRegistry>,
+       pub outside_nonces: Map<felt252, bool>
     }
 
     #[event]
@@ -132,6 +157,7 @@ pub mod AA {
         self.threshold.write(threshold);
     }
 
+    // helper for signature
     fn count_valid_signatures(self: @ContractState, hash: felt252, signature: Span<felt252>) -> u32 {
         assert!(signature.len() % 3 == 0, "signature len must be a multiple of 3");
         let mut valid_count = 0;
@@ -179,6 +205,7 @@ pub mod AA {
         return valid_count;
     }
 
+    // fn for spending_policies
     fn extract_spending_amount(call: @Call) -> u256 {
         let selector = *call.selector;
     
@@ -362,6 +389,73 @@ pub mod AA {
         }
     }
 
+    // helpers for checking nonce and setting
+    fn is_nonce_available(self: @ContractState, nonce: felt252) -> bool{
+        !self.outside_nonces.entry(nonce).read()
+    }
+
+    fn consume_nonce(ref self: ContractState, nonce: felt252){
+        assert!(!self.outside_nonces.entry(nonce).read(), "Nonce already used");
+        self.outside_nonces.entry(nonce).write(true);
+    }
+
+    // helper for checking OutsideExecution
+    fn assert_outside_execution_preconditions(self: @ContractState, outside_execution: OutsideExecution){
+        let any_caller: ContractAddress = ANY_CALLER.try_into().unwrap();
+        let now = get_block_timestamp();
+        assert!(get_caller_address() == outside_execution.caller || outside_execution.caller == any_caller, "Invalid calling");
+        assert!(outside_execution.execute_after < now, "not yet valid");
+        assert!(now < outside_execution.execute_before, "expired");
+        assert!(is_nonce_available(self, outside_execution.nonce), "nonce already used");
+
+
+
+
+
+    }
+
+    // hashing fn helpers
+    fn hash_outside_call(call: @StarknetCall) -> felt252{
+        let calldata: Span<felt252> = *call.calldata;
+        let calldata_hash = poseidon_hash_span(calldata);
+        let to: felt252 = (*call.to).into();
+        let selector = *call.selector;
+        let call_hash: felt252 = poseidon_hash_span(array![CALL_TYPE_HASH, to, selector, calldata_hash].span());
+        return call_hash;
+    }
+
+    fn hash_outside_calls(calls: Span<StarknetCall>) -> felt252{
+        let mut arr: Array<felt252> = ArrayTrait::new();
+        for call in calls{
+            arr.append(hash_outside_call(call));
+        }
+        let hash_res = poseidon_hash_span(arr.span());
+        return hash_res;
+    }
+
+    // hashing for SNIP-9
+    fn hash_outside_execution_struct(outside_execution: @OutsideExecution) -> felt252{
+        let felt_caller: felt252 = (*outside_execution.caller).into();
+        let nonce = *outside_execution.nonce;
+        let execution_after: felt252 = (*outside_execution.execute_after).into();
+        let execution_before: felt252 = (*outside_execution.execute_before).into();
+        let calls_hash = hash_outside_calls(*outside_execution.calls);
+        return poseidon_hash_span(array![OUTSIDE_EXECUTION_TYPE_HASH, felt_caller, nonce, execution_after, execution_before, calls_hash].span());
+    }
+
+    fn hash_outside_execution_domain() -> felt252{
+        let tx_info = get_tx_info().unbox();
+        let (chain_id, name, version, revision) = (tx_info.chain_id, 'Account.execute_from_outside', 2, 1);
+        return poseidon_hash_span(array![STARKNET_DOMAIN_TYPE_HASH, name, version, chain_id, revision].span());
+    }
+
+    fn hash_outside_execution_message(outside_execution: @OutsideExecution) -> felt252{
+        let domain_hash = hash_outside_execution_domain();
+        let felt_address: felt252 = get_contract_address().into();
+        let struct_hash = hash_outside_execution_struct(outside_execution);
+        return poseidon_hash_span(array!['StarkNet Message', domain_hash, felt_address, struct_hash].span());
+    }
+    
     #[abi(embed_v0)]
     impl Account of super::IAccount<ContractState>{
     
@@ -638,8 +732,21 @@ pub mod AA {
     #[abi(embed_v0)]
     impl SRC5Impl of super::ISRC5<ContractState>{
         fn supports_interface(self: @ContractState, interface_id: felt252) -> bool{
-            interface_id == SRC5_INTERFACE_ID || interface_id == SRC6_INTERFACE_ID
+            interface_id == SRC5_INTERFACE_ID || interface_id == SRC6_INTERFACE_ID || interface_id == SNIP9_V2_INTERFACE_ID
         }
+    }
+
+    #[abi(embed_v0)]
+    impl OutsideExecutionV2 of super::IOutsideExecutionV2<ContractState>{
+        fn is_valid_outside_execution_nonce(self: @ContractState, nonce: felt252) -> bool{
+            is_nonce_available(self, nonce)
+        }
+
+        fn execute_from_outside_v2(ref self: ContractState, outside_execution: OutsideExecution,  signature: Span<felt252>) -> Array<Span<felt252>>{
+                array![]
+        }
+
+
     }
 
 

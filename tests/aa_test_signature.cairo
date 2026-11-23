@@ -1,21 +1,26 @@
+use aa_experiment::AA::is_nonce_available;
 use snforge_std::cheatcodes::execution_info::contract_address;
 
 #[cfg(test)]
 mod tests{
-    use openzeppelin_account::account;
+    use openzeppelin_account::utils::signature;
+use snforge_std::start_cheat_block_timestamp;
+use super::contract_address;
+use openzeppelin_account::account;
     use snforge_std::start_cheat_signature;
     use starknet::ContractAddress;
     use snforge_std::{start_cheat_transaction_hash,
-    ContractClassTrait, DeclareResultTrait, declare, start_cheat_caller_address, stop_cheat_caller_address, 
-    stop_cheat_signature, stop_cheat_transaction_hash};
+        ContractClassTrait, DeclareResultTrait, declare, start_cheat_caller_address, stop_cheat_caller_address, 
+        stop_cheat_signature, stop_cheat_transaction_hash, start_cheat_chain_id, stop_cheat_chain_id};
     use snforge_std::signature::KeyPairTrait;
     use snforge_std::signature::SignerTrait;
     use snforge_std::signature::stark_curve::{
-    StarkCurveKeyPairImpl,
-    StarkCurveSignerImpl
-    };
+            StarkCurveKeyPairImpl,
+            StarkCurveSignerImpl
+        };
     use core::num::traits::Zero;
-
+    
+    use starknet::account::Call as StarknetCall;
     // use aa_experiment::AA;
     use aa_experiment::IAccountManagementDispatcher;
     use aa_experiment::IAccountManagementDispatcherTrait;
@@ -26,10 +31,16 @@ mod tests{
     use aa_experiment::ISRC5Dispatcher;
     use aa_experiment::ISRC5DispatcherTrait;
     use aa_experiment::IOutsideExecutionV2Dispatcher;
+    use aa_experiment::IOutsideExecutionV2SafeDispatcher;
+    use aa_experiment::IOutsideExecutionV2SafeDispatcherTrait;
     use aa_experiment::IOutsideExecutionV2DispatcherTrait;
+    use aa_experiment::IHashDebugDispatcher;
+    use aa_experiment::IHashDebugDispatcherTrait;
+    
     use aa_experiment::SessionEntrypoint;
     use aa_experiment::Call;
     use aa_experiment::SessionKey;
+    use aa_experiment::OutsideExecution;
     use aa_experiment::mock::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
 
     #[test]
@@ -350,6 +361,7 @@ mod tests{
         assert!(wrong_valid_1 == 0, "wrong sig musn't be validated");
     }
 
+    // testing SNIP 9 sig
     #[test]
     fn test_unused_nonce_is_available(){
         let contract = declare("aa_experiment::AA").unwrap().contract_class();
@@ -362,6 +374,950 @@ mod tests{
         let dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
 
         assert!(dispatcher.is_valid_outside_execution_nonce(0x032342), "message");
+    }
+
+    // < temporary test
+    #[test]
+    fn test_checking_hashings_helpers(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        // put calldata of constructor
+        let constructor_calldata = array![2, 1, 2, 2];
+
+        // deploy AA and get address
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+
+        let dispatcher = IHashDebugDispatcher { contract_address: contract_address }; 
+        let call_a = StarknetCall { to: 0x111, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+        let call_b = StarknetCall { to: 0x333, selector: selector!("approve"), calldata:  array![0x444, 0x5678, 200000000].span()};
+
+        let outside_execution = OutsideExecution { caller: 0x777, nonce: 0x12345, execute_after: 1000, execute_before: 2000, calls:  array![call_a, call_b].span()};
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let cairo_hash = dispatcher.hash_outside_for_test(outside_execution);
+        stop_cheat_chain_id(contract_address);
+        println!("ACCOUNT: 0x{:x}", contract_address);
+        println!("CAIRO HASH: 0x{:x}", cairo_hash);
+
+    }
+    // >
+
+    #[test]
+    fn test_outside_execution(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let (dai, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        let dai_dispatcher = IMockERC20Dispatcher { contract_address: dai};
+
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+        let call_b = StarknetCall { to: dai, selector: selector!("approve"), calldata:  array![0x444, 200000000, 0].span()};
+
+        let allowed_caller = 0x007;
+        let nonce = 0x020304;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a, call_b].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce),"Nonce must be available before execution");
+        let res = outside_execution_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        assert!(res.len() == 2, "Both calls must return results");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 0, "must be zeor balance");
+        assert!(usdc_dispatcher.balance_of(0x222) == 100000000, "must be 100000000");
+        assert!(dai_dispatcher.allowance(contract_address, 0x444) == 200000000, "allowance must be 200000000");
+        assert!(!outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce is not available");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_insufficient_signatures(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+
+        let allowed_caller = 0x007;
+        let nonce = 0x020304;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let signature =  array![key_a_felt, r_a, s_a];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        match res {
+             Result::Ok(_) => {
+             assert!(false, "outside executin should have failed");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA hasn't be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of recipient must be 0");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_replayed_nonce(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+
+        let allowed_caller = 0x007;
+        let nonce = 0x020304;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        outside_execution_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        assert!(!outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must not be available after execution");
+        let recipient_balance = usdc_dispatcher.balance_of(0x222);
+        assert!(recipient_balance == 100000000, "First execution must transfer tokens");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+
+        match res{
+            Result::Ok(_) => {
+             assert!(false, "outside executin should have failed");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(usdc_dispatcher.balance_of(0x222) == recipient_balance, "Balance of recipient musnt't be changed after second execution");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_wrong_caller(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+
+        let allowed_caller = 0x007;
+        let wrong_caller = 0x008;
+        let nonce = 0x020304;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        start_cheat_caller_address(contract_address, wrong_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "must be false");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must remain available after rejection");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA hasn't be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of recipient must be 0");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_before_execute_after(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+
+        let allowed_caller = 0x007;
+        let nonce = 0x020304;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 1500);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "must be false");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must remain available after rejection");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA hasn't be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of recipient must be 0");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_after_execute_before(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+
+        let allowed_caller = 0x007;
+        let nonce = 0x020304;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2500);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "must be false");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must remain available after rejection");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA hasn't be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of recipient must be 0");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rollbacks_on_failed_call(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+        let call_b = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0xDEAD, 100000000, 0].span()};
+
+
+        let allowed_caller = 0x007;
+        let nonce = 0x020305;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a, call_b].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "must be false");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA hasn't be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of recipient must be 0");
+    }
+
+    #[test]
+    fn test_outside_execution_accepts_any_caller(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+
+
+        let any_caller: ContractAddress = 0x414e595f43414c4c4552; //0x414e595f43414c4c4552 is ANY_CALLER constant in contract
+        let actual_caller: ContractAddress = 0x008;
+        let nonce = 0x020305;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: any_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        start_cheat_caller_address(contract_address, actual_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        outside_execution_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        assert!(usdc_dispatcher.balance_of(contract_address) == 0, "balance of AA must be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 100000000, "balance of recipient must be 100000000");
+        assert!(!outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce mustn't be available after execution");
+    }
+
+    #[test]
+    fn test_outside_execution_with_empty_calls(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+
+        let allowed_caller: ContractAddress = 0x008;
+        let nonce = 0x020305;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        assert!(res.len() == 0, "result must have zero items in returned arr");
+        assert!(!outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must not be available after execution");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_invalid_ecdsa_signature(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+        let allowed_caller: ContractAddress = 0x008;
+        let nonce = 0x020305;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(0x0305048437).unwrap();
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "expected false res");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available after rejected execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA hasn't be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of recipient must be 0");
+    }
+
+    #[test]
+    fn test_outside_execution_ignores_invalid_signature_before_valid_one(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+        let allowed_caller: ContractAddress = 0x008;
+        let nonce = 0x020305;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a_invalid, s_a_invalid) = key_pair_a.sign(0x03847373).unwrap();
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+        let signature =  array![key_a_felt, r_a_invalid, s_a_invalid, key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        outside_execution_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+       
+        assert!(!outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must not be available after execution");
+        assert!(usdc_dispatcher.balance_of(0x222) == 100000000, "balance of recipient must recieve 100000000");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 0, "balance of AA must be 0 after success transfer");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_duplicate_owner_signatures(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+        let allowed_caller: ContractAddress = 0x008;
+        let nonce = 0x020305;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let signature =  array![key_a_felt, r_a, s_a, key_a_felt, r_a, s_a,];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "transaction must be failed");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must not be available after invalid execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of 0x222 must be 0 after failed transfer");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_non_owner_signature(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+        let key_pair_c =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(38275873);
+
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+        let key_c_felt = key_pair_c.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+        let allowed_caller: ContractAddress = 0x008;
+        let nonce = 0x020305;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_c, s_c) = key_pair_c.sign(message_hash).unwrap();
+
+        let signature =  array![key_a_felt, r_a, s_a, key_c_felt, r_c, s_c];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "transaction must be failed");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must not be available after invalid execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of 0x222 must be 0 after failed transfer");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_malformed_signature_length(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+      
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+        let allowed_caller: ContractAddress = 0x008;
+        let nonce = 0x020305;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "transaction must be failed");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must not be available after invalid execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of 0x222 must be 0 after failed transfer");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_modified_calls(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+      
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+        let call_b = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x333, 100000000, 0].span()};
+
+        let allowed_caller: ContractAddress = 0x008;
+        let nonce = 0x020305;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        let another_outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_b].span() };
+
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(another_outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "transaction must be failed");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must not be available after invalid execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of 0x222 must be 0 after failed transfer");
+        assert!(usdc_dispatcher.balance_of(0x333) == 0, "balance of 0x333 must be 0 after failed transfer");
+
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_cross_account_replay(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+      
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (contract_address_1, _) = contract.deploy(@constructor_calldata).unwrap();
+
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+        usdc_dispatcher.mint(contract_address_1, 100000000_u256);
+
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let hash_debug_1 = IHashDebugDispatcher {contract_address: contract_address_1};
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher_1 = IOutsideExecutionV2Dispatcher { contract_address: contract_address_1 };
+        let outside_execution_safe_dispatcher_1 = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address_1 };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+
+        let allowed_caller: ContractAddress = 0x008;
+        let nonce = 0x020305;
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        start_cheat_caller_address(contract_address_1, allowed_caller);
+        start_cheat_block_timestamp(contract_address_1, 2000);
+        start_cheat_chain_id(contract_address_1, 'SN_SEPOLIA');
+        let message_hash_1 = hash_debug_1.hash_outside_for_test(outside_execution);
+        assert!(message_hash != message_hash_1, "Different accounts must produce different message hashes");
+        
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce of first AA must be available before execution");
+        assert!(outside_execution_dispatcher_1.is_valid_outside_execution_nonce(nonce), "Nonce of second AA must be available before execution");
+        let res = outside_execution_safe_dispatcher_1.execute_from_outside_v2(outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "transaction must be failed");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce of first AA must be available after invalid execution");
+        assert!(outside_execution_dispatcher_1.is_valid_outside_execution_nonce(nonce), "Nonce of second AA must remain available after rejected execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
+        assert!(usdc_dispatcher.balance_of(contract_address_1) == 100000000, "balance of AA must not be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of 0x222 must be 0 after failed transfer");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_modified_caller(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+      
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+
+        let allowed_caller = 0x007;
+        let actual_caller = 0x008;
+        let any_caller = 0x414e595f43414c4c4552;
+        let nonce = 0x020305;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        let another_outside_execution = OutsideExecution { caller: any_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        start_cheat_caller_address(contract_address, actual_caller);
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(another_outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "transaction must be failed");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must remain available after rejected execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of 0x222 must be 0 after failed transfer");
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_modified_execute_before(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+      
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
+
+        let allowed_caller = 0x007;
+        let nonce = 0x020305;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        let another_outside_execution = OutsideExecution { caller: allowed_caller, nonce: nonce, execute_after: 1500, execute_before: 3000, calls: array![call_a].span() };
+
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(another_outside_execution, signature.span());
+        match res{
+            Result::Ok(_) => {
+                assert!(false, "transaction must be failed");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must remain available after rejected execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
+        assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of 0x222 must be 0 after failed transfer");
     }
 
 

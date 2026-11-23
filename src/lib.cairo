@@ -85,10 +85,16 @@ use starknet::account::Call as StarknetCall;
        fn remove_spending_policy(ref self: TState, session_key: felt252, token: ContractAddress);
     }
 
+    // must be removed before deploy to real Starknet Network, it's only need for tests
+#[starknet::interface]
+    pub trait IHashDebug<TState> {
+        fn hash_outside_for_test(self: @TState,  outside_execution: OutsideExecution) -> felt252;
+    }
+
 #[starknet::contract(account)]
 pub mod AA {
     use starknet::get_tx_info;
-use starknet::event::EventEmitter;
+    use starknet::event::EventEmitter;
     use starknet::SyscallResultTrait;
    // use starknet::syscalls::call_contract_syscall;
     use starknet::storage::{Map, StoragePathEntry, StoragePointerReadAccess,
@@ -194,10 +200,10 @@ use starknet::event::EventEmitter;
                 continue;
             }
 
-            seen.append(pub_key);
             // Validate ECDSA signature and increment counter if valid
             let is_valid = core::ecdsa::check_ecdsa_signature(hash, pub_key, sig_r, sig_s);
             if is_valid {
+                seen.append(pub_key);
                 valid_count += 1;
             }
         }
@@ -390,7 +396,7 @@ use starknet::event::EventEmitter;
     }
 
     // helpers for checking nonce and setting
-    fn is_nonce_available(self: @ContractState, nonce: felt252) -> bool{
+    pub fn is_nonce_available(self: @ContractState, nonce: felt252) -> bool{
         !self.outside_nonces.entry(nonce).read()
     }
 
@@ -407,11 +413,6 @@ use starknet::event::EventEmitter;
         assert!(outside_execution.execute_after < now, "not yet valid");
         assert!(now < outside_execution.execute_before, "expired");
         assert!(is_nonce_available(self, outside_execution.nonce), "nonce already used");
-
-
-
-
-
     }
 
     // hashing fn helpers
@@ -449,7 +450,7 @@ use starknet::event::EventEmitter;
         return poseidon_hash_span(array![STARKNET_DOMAIN_TYPE_HASH, name, version, chain_id, revision].span());
     }
 
-    fn hash_outside_execution_message(outside_execution: @OutsideExecution) -> felt252{
+    pub fn hash_outside_execution_message(outside_execution: @OutsideExecution) -> felt252{
         let domain_hash = hash_outside_execution_domain();
         let felt_address: felt252 = get_contract_address().into();
         let struct_hash = hash_outside_execution_struct(outside_execution);
@@ -743,10 +744,28 @@ use starknet::event::EventEmitter;
         }
 
         fn execute_from_outside_v2(ref self: ContractState, outside_execution: OutsideExecution,  signature: Span<felt252>) -> Array<Span<felt252>>{
-                array![]
+            assert_outside_execution_preconditions(@self, outside_execution);
+            let message_hash = hash_outside_execution_message(@outside_execution);
+            let valid_count = count_valid_signatures(@self, message_hash, signature);
+            assert!(valid_count >= self.threshold.read(), "OutsideExecution: invalid signature");
+            consume_nonce(ref self, outside_execution.nonce);
+            let mut arr: Array<Span<felt252>> = ArrayTrait::new();
+            for call in outside_execution.calls{
+                let res = starknet::syscalls::call_contract_syscall(*call.to, *call.selector, *call.calldata).unwrap_syscall();
+                arr.append(res);
+            }
+            return arr;
         }
 
 
+    }
+
+    // must be removed before deploy to real Starknet Network
+    #[abi(embed_v0)]
+    impl HashDebug of super::IHashDebug<ContractState> {
+        fn hash_outside_for_test(self: @ContractState, outside_execution: OutsideExecution) -> felt252 {
+            hash_outside_execution_message(@outside_execution)
+        }
     }
 
 

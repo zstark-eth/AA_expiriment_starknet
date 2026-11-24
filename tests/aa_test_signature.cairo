@@ -4,9 +4,9 @@ use snforge_std::cheatcodes::execution_info::contract_address;
 #[cfg(test)]
 mod tests{
     use openzeppelin_account::utils::signature;
-use snforge_std::start_cheat_block_timestamp;
-use super::contract_address;
-use openzeppelin_account::account;
+    use snforge_std::start_cheat_block_timestamp;
+    use super::contract_address;
+    use openzeppelin_account::account;
     use snforge_std::start_cheat_signature;
     use starknet::ContractAddress;
     use snforge_std::{start_cheat_transaction_hash,
@@ -14,14 +14,11 @@ use openzeppelin_account::account;
         stop_cheat_signature, stop_cheat_transaction_hash, start_cheat_chain_id, stop_cheat_chain_id};
     use snforge_std::signature::KeyPairTrait;
     use snforge_std::signature::SignerTrait;
-    use snforge_std::signature::stark_curve::{
-            StarkCurveKeyPairImpl,
-            StarkCurveSignerImpl
-        };
+    use snforge_std::signature::stark_curve::{StarkCurveKeyPairImpl, StarkCurveSignerImpl};
     use core::num::traits::Zero;
     
     use starknet::account::Call as StarknetCall;
-    // use aa_experiment::AA;
+    use aa_experiment::AA::{hash_outside_calls, hash_outside_execution_struct, hash_outside_execution_domain, hash_outside_execution_message};
     use aa_experiment::IAccountManagementDispatcher;
     use aa_experiment::IAccountManagementDispatcherTrait;
     use aa_experiment::IAccountDispatcher;
@@ -34,14 +31,18 @@ use openzeppelin_account::account;
     use aa_experiment::IOutsideExecutionV2SafeDispatcher;
     use aa_experiment::IOutsideExecutionV2SafeDispatcherTrait;
     use aa_experiment::IOutsideExecutionV2DispatcherTrait;
-    use aa_experiment::IHashDebugDispatcher;
-    use aa_experiment::IHashDebugDispatcherTrait;
     
     use aa_experiment::SessionEntrypoint;
     use aa_experiment::Call;
     use aa_experiment::SessionKey;
     use aa_experiment::OutsideExecution;
     use aa_experiment::mock::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
+    use aa_experiment::mock::{IReentrancyProbeDispatcher, IReentrancyProbeDispatcherTrait};
+
+    fn calculate_outside_execution_hash(address: ContractAddress, chain_id: felt252, outside_execution: OutsideExecution) -> felt252{
+       hash_outside_execution_message(address, @outside_execution, chain_id)
+    }
+
 
     #[test]
     fn test_checking_multisig() {
@@ -386,13 +387,12 @@ use openzeppelin_account::account;
         // deploy AA and get address
         let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
 
-        let dispatcher = IHashDebugDispatcher { contract_address: contract_address }; 
         let call_a = StarknetCall { to: 0x111, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
         let call_b = StarknetCall { to: 0x333, selector: selector!("approve"), calldata:  array![0x444, 0x5678, 200000000].span()};
 
         let outside_execution = OutsideExecution { caller: 0x777, nonce: 0x12345, execute_after: 1000, execute_before: 2000, calls:  array![call_a, call_b].span()};
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let cairo_hash = dispatcher.hash_outside_for_test(outside_execution);
+        let cairo_hash =  calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
         stop_cheat_chain_id(contract_address);
         println!("ACCOUNT: 0x{:x}", contract_address);
         println!("CAIRO HASH: 0x{:x}", cairo_hash);
@@ -421,12 +421,12 @@ use openzeppelin_account::account;
         let dai_dispatcher = IMockERC20Dispatcher { contract_address: dai};
 
         usdc_dispatcher.mint(contract_address, 100000000_u256);
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
+        
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
-
+        
         let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
         let call_b = StarknetCall { to: dai, selector: selector!("approve"), calldata:  array![0x444, 200000000, 0].span()};
-
+        
         let allowed_caller = 0x007;
         let nonce = 0x020304;
         // deploy AA and get address
@@ -434,7 +434,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
         let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
@@ -467,7 +468,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -481,7 +481,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let signature =  array![key_a_felt, r_a, s_a];
         assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
@@ -517,7 +518,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -531,7 +531,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
 
@@ -572,7 +573,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -587,7 +587,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, wrong_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
         let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
@@ -624,7 +625,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -638,7 +638,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 1500);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
         let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
@@ -675,7 +676,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -689,7 +689,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2500);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
         let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
@@ -726,7 +727,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -742,7 +742,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
         let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
@@ -778,7 +779,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
 
 
@@ -793,7 +793,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, actual_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash = calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
         let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
@@ -819,7 +820,6 @@ use openzeppelin_account::account;
         let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
         let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
 
         let allowed_caller: ContractAddress = 0x008;
@@ -829,7 +829,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
         let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
@@ -859,7 +860,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -871,7 +871,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(0x0305048437).unwrap();
         let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
@@ -907,7 +908,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
 
         let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
@@ -918,7 +918,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a_invalid, s_a_invalid) = key_pair_a.sign(0x03847373).unwrap();
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
@@ -951,7 +952,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -964,7 +964,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let signature =  array![key_a_felt, r_a, s_a, key_a_felt, r_a, s_a,];
         assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
@@ -1003,7 +1004,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -1016,7 +1016,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_c, s_c) = key_pair_c.sign(message_hash).unwrap();
 
@@ -1054,7 +1055,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -1067,9 +1067,10 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
-        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+        let (r_b, _) = key_pair_b.sign(message_hash).unwrap();
 
         let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b];
         assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must be available before execution");
@@ -1105,7 +1106,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -1122,7 +1122,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
 
@@ -1166,12 +1167,9 @@ use openzeppelin_account::account;
         usdc_dispatcher.mint(contract_address_1, 100000000_u256);
 
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
-        let hash_debug_1 = IHashDebugDispatcher {contract_address: contract_address_1};
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_dispatcher_1 = IOutsideExecutionV2Dispatcher { contract_address: contract_address_1 };
         let outside_execution_safe_dispatcher_1 = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address_1 };
-
 
         let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x222, 100000000, 0].span()};
 
@@ -1182,11 +1180,12 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         start_cheat_caller_address(contract_address_1, allowed_caller);
         start_cheat_block_timestamp(contract_address_1, 2000);
         start_cheat_chain_id(contract_address_1, 'SN_SEPOLIA');
-        let message_hash_1 = hash_debug_1.hash_outside_for_test(outside_execution);
+        let message_hash_1 =   calculate_outside_execution_hash(contract_address_1, 'SN_SEPOLIA', outside_execution);
         assert!(message_hash != message_hash_1, "Different accounts must produce different message hashes");
         
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
@@ -1229,7 +1228,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -1247,7 +1245,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
 
@@ -1286,7 +1285,6 @@ use openzeppelin_account::account;
         let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
         usdc_dispatcher.mint(contract_address, 100000000_u256);
 
-        let hash_debug = IHashDebugDispatcher { contract_address: contract_address };
         let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
         let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
 
@@ -1302,7 +1300,8 @@ use openzeppelin_account::account;
         start_cheat_caller_address(contract_address, allowed_caller);
         start_cheat_block_timestamp(contract_address, 2000);
         start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
-        let message_hash = hash_debug.hash_outside_for_test(outside_execution);
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
         let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
         let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
 
@@ -1318,6 +1317,125 @@ use openzeppelin_account::account;
         assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(nonce), "Nonce must remain available after rejected execution");
         assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
         assert!(usdc_dispatcher.balance_of(0x222) == 0, "balance of 0x222 must be 0 after failed transfer");
+    }
+
+    #[test]
+    fn test_outside_execution_blocks_reentrancy(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let reentracy_contract = declare("ReentrancyProbe").unwrap().contract_class();
+
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+      
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+        let any_caller = 0x414e595f43414c4c4552;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+
+        let (reentracy_probe, _) = reentracy_contract.deploy(@array![]).unwrap();
+        let reentracy_prove_dispatcher = IReentrancyProbeDispatcher { contract_address: reentracy_probe };
+
+        let amount: u256 = 100000000;
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x333, 100000000, 0].span()};
+        let reentracy_outside_execution = OutsideExecution { caller: any_caller, nonce: 0x020309, execute_after: 1500, execute_before: 2500, calls:  array![call_a].span()};
+        start_cheat_caller_address(contract_address, 0x007);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash =  calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', reentracy_outside_execution);
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+
+        let inner_signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        let mut probe_calldata: Array<felt252> = array![
+            contract_address.into(),
+            usdc.into(),
+            0x333,
+            amount.low.into(),
+            amount.high.into(),
+            0x020309,
+            1500,
+            2500,
+            inner_signature.len().into()
+        ];
+        for value in inner_signature.span() {
+            probe_calldata.append(*value);
+        }
+        let reentracy_call = StarknetCall {to: reentracy_probe, selector: selector!("attempt_reentry"), calldata: probe_calldata.span()};
+        let outside_execution = OutsideExecution { caller: 0x007, nonce: 0x020309, execute_after: 1500, execute_before: 2500, calls: array![reentracy_call].span() };
+        let hash_outside_execution =  calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+        let (r_a_1, s_a_1) = key_pair_a.sign(hash_outside_execution).unwrap();
+        let (r_b_1, s_b_1) = key_pair_b.sign(hash_outside_execution).unwrap();
+        let outer_signature = array![key_a_felt, r_a_1, s_a_1, key_b_felt, r_b_1, s_b_1];
+
+        outside_execution_dispatcher.execute_from_outside_v2(outside_execution, outer_signature.span());
+        assert!(reentracy_prove_dispatcher.was_reentry_rejected(), "reentracy must be rejected");
+        assert!(!outside_execution_dispatcher.is_valid_outside_execution_nonce(0x020309), "Nonce must not be available after execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
+        assert!(usdc_dispatcher.balance_of(0x333) == 0, "balance of 0x333 must be 0 after failed transfer");
+
+    }
+
+    #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_modified_nonce(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+      
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x001, 100000000, 0].span()};
+
+        let allowed_caller = 0x007;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: 0x111, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+        let another_outside_execution = OutsideExecution { caller: allowed_caller, nonce: 0x222, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_SEPOLIA');
+        let message_hash =   calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(another_outside_execution, signature.span());
+        match res {
+            Result::Ok(_) => {
+                assert!(false, "Expected false for Result::Ok");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(0x111), "Nonce 0x111 must remain available after rejected execution");
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(0x222), "Nonce 0x222 must remain available after rejected execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
+        assert!(usdc_dispatcher.balance_of(0x001) == 0, "balance of 0x001 must be 0 after failed transfer");
     }
 
 

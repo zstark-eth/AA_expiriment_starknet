@@ -85,12 +85,6 @@ use starknet::account::Call as StarknetCall;
        fn remove_spending_policy(ref self: TState, session_key: felt252, token: ContractAddress);
     }
 
-    // must be removed before deploy to real Starknet Network, it's only need for tests
-#[starknet::interface]
-    pub trait IHashDebug<TState> {
-        fn hash_outside_for_test(self: @TState,  outside_execution: OutsideExecution) -> felt252;
-    }
-
 #[starknet::contract(account)]
 pub mod AA {
     use starknet::get_tx_info;
@@ -425,7 +419,7 @@ pub mod AA {
         return call_hash;
     }
 
-    fn hash_outside_calls(calls: Span<StarknetCall>) -> felt252{
+    pub fn hash_outside_calls(calls: Span<StarknetCall>) -> felt252{
         let mut arr: Array<felt252> = ArrayTrait::new();
         for call in calls{
             arr.append(hash_outside_call(call));
@@ -435,7 +429,7 @@ pub mod AA {
     }
 
     // hashing for SNIP-9
-    fn hash_outside_execution_struct(outside_execution: @OutsideExecution) -> felt252{
+    pub fn hash_outside_execution_struct(outside_execution: @OutsideExecution) -> felt252{
         let felt_caller: felt252 = (*outside_execution.caller).into();
         let nonce = *outside_execution.nonce;
         let execution_after: felt252 = (*outside_execution.execute_after).into();
@@ -444,15 +438,14 @@ pub mod AA {
         return poseidon_hash_span(array![OUTSIDE_EXECUTION_TYPE_HASH, felt_caller, nonce, execution_after, execution_before, calls_hash].span());
     }
 
-    fn hash_outside_execution_domain() -> felt252{
-        let tx_info = get_tx_info().unbox();
-        let (chain_id, name, version, revision) = (tx_info.chain_id, 'Account.execute_from_outside', 2, 1);
+    pub fn hash_outside_execution_domain(chain_id: felt252) -> felt252{
+        let (name, version, revision) = ('Account.execute_from_outside', 2, 1);
         return poseidon_hash_span(array![STARKNET_DOMAIN_TYPE_HASH, name, version, chain_id, revision].span());
     }
 
-    pub fn hash_outside_execution_message(outside_execution: @OutsideExecution) -> felt252{
-        let domain_hash = hash_outside_execution_domain();
-        let felt_address: felt252 = get_contract_address().into();
+    pub fn hash_outside_execution_message(account_address: ContractAddress, outside_execution: @OutsideExecution, chain_id: felt252) -> felt252{
+        let domain_hash = hash_outside_execution_domain(chain_id);
+        let felt_address: felt252 = account_address.into();
         let struct_hash = hash_outside_execution_struct(outside_execution);
         return poseidon_hash_span(array!['StarkNet Message', domain_hash, felt_address, struct_hash].span());
     }
@@ -744,8 +737,9 @@ pub mod AA {
         }
 
         fn execute_from_outside_v2(ref self: ContractState, outside_execution: OutsideExecution,  signature: Span<felt252>) -> Array<Span<felt252>>{
+            let tx_info = get_tx_info().unbox();
             assert_outside_execution_preconditions(@self, outside_execution);
-            let message_hash = hash_outside_execution_message(@outside_execution);
+            let message_hash = hash_outside_execution_message(get_contract_address(), @outside_execution, tx_info.chain_id);
             let valid_count = count_valid_signatures(@self, message_hash, signature);
             assert!(valid_count >= self.threshold.read(), "OutsideExecution: invalid signature");
             consume_nonce(ref self, outside_execution.nonce);
@@ -760,14 +754,4 @@ pub mod AA {
 
     }
 
-    // must be removed before deploy to real Starknet Network
-    #[abi(embed_v0)]
-    impl HashDebug of super::IHashDebug<ContractState> {
-        fn hash_outside_for_test(self: @ContractState, outside_execution: OutsideExecution) -> felt252 {
-            hash_outside_execution_message(@outside_execution)
-        }
-    }
-
-
-    
 }

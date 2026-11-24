@@ -1,4 +1,5 @@
 use starknet::{ContractAddress};
+use aa_experiment::OutsideExecution;
 
 #[starknet::interface]
  pub trait IMockERC20<TState> {
@@ -8,6 +9,14 @@ use starknet::{ContractAddress};
    fn allowance(self: @TState, owner: ContractAddress, spender: ContractAddress) -> u256;
    fn transfer(ref self: TState, recipient: ContractAddress, amount: u256) -> bool;
    fn transfer_from(ref self: TState, sender: ContractAddress, recipient: ContractAddress, amount: u256) -> bool;
+}
+
+#[starknet::interface]
+ pub trait IReentrancyProbe<TState> {
+    fn attempt_reentry(ref self: TState, account: ContractAddress, token: ContractAddress, recipient: ContractAddress,
+    amount: u256, nonce: felt252, execute_after: u64, execute_before: u64, signature: Array<felt252>);
+
+    fn was_reentry_rejected(self: @TState) -> bool;
 }
 
  #[starknet::contract]
@@ -72,6 +81,58 @@ use starknet::{ContractAddress};
             self.allowances.entry(sender).entry(caller).write(allowed - amount);
             
             return true;
+        }
+    }
+}
+
+#[starknet::contract]
+pub mod ReentrancyProbe{
+    use crate::OutsideExecution;
+    use starknet::{get_caller_address};
+    use super::{ContractAddress};
+    use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
+    use starknet::account::Call as StarknetCall;
+    use crate::IOutsideExecutionV2SafeDispatcher;
+    use crate::IOutsideExecutionV2SafeDispatcherTrait;
+    
+
+#[storage]
+    struct Storage {
+       reentry_rejected: bool,
+    }
+
+#[constructor]
+    fn constructor(ref self: ContractState){}
+
+#[abi(embed_v0)] 
+    impl ImplReentrancyProbe of super::IReentrancyProbe<ContractState>{
+
+#[feature("safe_dispatcher")]
+        fn attempt_reentry(ref self: ContractState, account: ContractAddress, token: ContractAddress, recipient: ContractAddress,
+            amount: u256, nonce: felt252, execute_after: u64, execute_before: u64, signature: Array<felt252>){
+            let any_caller: ContractAddress = 0x414e595f43414c4c4552;
+            let new_recipient: felt252 = recipient.into();
+            let new_amount_low: felt252 = amount.low.into();
+            let new_amount_high: felt252 = amount.high.into();
+
+            let call = StarknetCall {to: token, selector: selector!("transfer"), calldata: array![new_recipient, new_amount_low, new_amount_high].span()};
+            let outside_execution = OutsideExecution { caller: any_caller, nonce: nonce, execute_after: execute_after, execute_before: execute_before, calls: array![call].span()}; 
+
+            let safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: account };
+            let res = safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+            match res{
+                Result::Ok(_) => {
+                    self.reentry_rejected.write(false);
+                },
+                Result::Err(_) => {
+                    self.reentry_rejected.write(true);
+
+                }
+            }
+        }
+
+        fn was_reentry_rejected(self: @ContractState) -> bool{
+            self.reentry_rejected.read()
         }
     }
 }

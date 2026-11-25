@@ -1,4 +1,3 @@
-use snforge_std::cheatcodes::execution_info::contract_address;
 
 #[cfg(test)]
 
@@ -899,7 +898,7 @@ mod tests{
         //getting its public key, hash and start cheating
         let key_felt = key_pair.public_key;
         let tx_hash = 0x123456;
-        let (r, s) = key_pair.sign(tx_hash).unwrap();
+        let (r, _) = key_pair.sign(tx_hash).unwrap();
 
         let usdc: ContractAddress = 0x12345;
         let session_contract_a = SessionEntrypoint{target_contract: usdc, selector: selector!("transfer")};

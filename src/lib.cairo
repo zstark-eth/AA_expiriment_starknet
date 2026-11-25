@@ -66,6 +66,12 @@ use starknet::account::Call as StarknetCall;
     }
 
 #[starknet::interface]
+    pub trait IDeployable<TState>{
+        fn __validate_deploy__(self: @TState, class_hash: felt252, contract_address_salt: felt252,
+             pub_keys: Array<felt252>, threshold: u32) -> felt252;
+    }
+
+#[starknet::interface]
     pub trait IAccountManagement<TState> {
        fn add_guardian(ref self: TState, address: ContractAddress);
        fn remove_guardian(ref self: TState, address: ContractAddress);
@@ -99,7 +105,6 @@ pub mod AA {
     use super::Call;
     use core::num::traits::Zero;
     use core::poseidon::poseidon_hash_span;
-    use core::poseidon::PoseidonTrait;
 
     const SRC5_INTERFACE_ID: felt252 = 0x3f918d17e5ee77373b56385708f855659a07f75997f365cf87748628532a055;
     const SRC6_INTERFACE_ID: felt252 = 0x2ceccef7f994940b3962a6c67e0ba4fcd37df7d131417c604f91e03caecc1cd;
@@ -108,6 +113,9 @@ pub mod AA {
     const CALL_TYPE_HASH: felt252 = 0x3635c7f2a7ba93844c0d064e18e487f35ab90f7c39d00f186a781fc3f0c2ca9;
     const OUTSIDE_EXECUTION_TYPE_HASH: felt252 = 0x312b56c05a7965066ddbda31c016d8d05afc305071c0ca3cdc2192c3c2f1f0f;
     const STARKNET_DOMAIN_TYPE_HASH: felt252 = 0x1ff2f602e42168014d405a94f75e8a93d640751d71d16311266e140d8b0a210;
+
+    const DEPLOY_ACCOUNT_V3: felt252 = 3;
+    const QUERY_VERSION_OFFSET: felt252 = 0x100000000000000000000000000000000;
 
     #[starknet::storage_node]
     pub struct PolicyTokenRegistry {
@@ -541,6 +549,21 @@ pub mod AA {
                 return starknet::VALIDATED;
             }
             0
+        }
+    }
+
+    #[abi(embed_v0)]
+    impl Deployable of super::IDeployable<ContractState>{
+        fn __validate_deploy__(self: @ContractState, class_hash: felt252, contract_address_salt: felt252, pub_keys: Array<felt252>, threshold: u32) -> felt252{
+            let tx_info = get_tx_info().unbox();
+           assert!(get_caller_address() == Zero::zero(), "Only protocol call allowed");
+           assert!(tx_info.version == DEPLOY_ACCOUNT_V3 ||
+           tx_info.version == DEPLOY_ACCOUNT_V3 + QUERY_VERSION_OFFSET, "DeployAccount: unsupported transaction version");
+           let tx_hash = tx_info.transaction_hash;
+           let signature = tx_info.signature;
+           let valid_count = count_valid_signatures(self, tx_hash, signature);
+           assert!(valid_count >= self.threshold.read(), "DeployAccount: invalid signature");
+           return starknet::VALIDATED;
         }
     }
 

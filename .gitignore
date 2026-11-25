@@ -4,3 +4,7 @@ snfoundry_trace/
 coverage/
 profile/
 .vscode/
+deployment/.env
+deployment/node_modules/
+.env
+node_modules/

@@ -1,4 +1,3 @@
-use aa_experiment::AA::is_nonce_available;
 use snforge_std::cheatcodes::execution_info::contract_address;
 
 #[cfg(test)]
@@ -11,14 +10,14 @@ mod tests{
     use starknet::ContractAddress;
     use snforge_std::{start_cheat_transaction_hash,
         ContractClassTrait, DeclareResultTrait, declare, start_cheat_caller_address, stop_cheat_caller_address, 
-        stop_cheat_signature, stop_cheat_transaction_hash, start_cheat_chain_id, stop_cheat_chain_id};
+        start_cheat_chain_id, stop_cheat_chain_id};
     use snforge_std::signature::KeyPairTrait;
     use snforge_std::signature::SignerTrait;
     use snforge_std::signature::stark_curve::{StarkCurveKeyPairImpl, StarkCurveSignerImpl};
     use core::num::traits::Zero;
     
     use starknet::account::Call as StarknetCall;
-    use aa_experiment::AA::{hash_outside_calls, hash_outside_execution_struct, hash_outside_execution_domain, hash_outside_execution_message};
+    use aa_experiment::AA::{hash_outside_execution_message};
     use aa_experiment::IAccountManagementDispatcher;
     use aa_experiment::IAccountManagementDispatcherTrait;
     use aa_experiment::IAccountDispatcher;
@@ -1437,6 +1436,59 @@ mod tests{
         assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
         assert!(usdc_dispatcher.balance_of(0x001) == 0, "balance of 0x001 must be 0 after failed transfer");
     }
+
+     #[feature("safe_dispatcher")]
+    #[test]
+    fn test_outside_execution_rejects_signature_from_another_chain(){
+        let contract = declare("aa_experiment::AA").unwrap().contract_class();
+        let mock = declare("MockERC20").unwrap().contract_class();
+        let key_pair_a =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(1234567);
+        let key_pair_b =
+        KeyPairTrait::<felt252, felt252>::from_secret_key(9384759);
+      
+        let key_a_felt = key_pair_a.public_key;
+        let key_b_felt = key_pair_b.public_key;
+
+        // put calldata of constructor
+        let constructor_calldata = array![2, key_a_felt, key_b_felt, 2];
+        let (contract_address, _) = contract.deploy(@constructor_calldata).unwrap();
+        let (usdc, _) = mock.deploy(@array![]).unwrap();
+        let usdc_dispatcher = IMockERC20Dispatcher { contract_address: usdc};
+        usdc_dispatcher.mint(contract_address, 100000000_u256);
+
+        let outside_execution_dispatcher = IOutsideExecutionV2Dispatcher { contract_address: contract_address };
+        let outside_execution_safe_dispatcher = IOutsideExecutionV2SafeDispatcher { contract_address: contract_address };
+
+
+        let call_a = StarknetCall { to: usdc, selector: selector!("transfer"), calldata:  array![0x001, 100000000, 0].span()};
+
+        let allowed_caller = 0x007;
+        // deploy AA and get address
+        let outside_execution = OutsideExecution { caller: allowed_caller, nonce: 0x111, execute_after: 1500, execute_before: 2500, calls: array![call_a].span() };
+
+        start_cheat_caller_address(contract_address, allowed_caller);
+        start_cheat_block_timestamp(contract_address, 2000);
+        start_cheat_chain_id(contract_address, 'SN_MAIN');
+        let message_hash = calculate_outside_execution_hash(contract_address, 'SN_SEPOLIA', outside_execution);
+
+        let (r_a, s_a) = key_pair_a.sign(message_hash).unwrap();
+        let (r_b, s_b) = key_pair_b.sign(message_hash).unwrap();
+
+        let signature =  array![key_a_felt, r_a, s_a, key_b_felt, r_b, s_b];
+        let res = outside_execution_safe_dispatcher.execute_from_outside_v2(outside_execution, signature.span());
+        match res {
+            Result::Ok(_) => {
+                assert!(false, "Expected false for Result::Ok");
+            },
+            Result::Err(_) => {}
+        }
+        assert!(outside_execution_dispatcher.is_valid_outside_execution_nonce(0x111), "Nonce 0x111 must remain available after rejected execution");
+        assert!(usdc_dispatcher.balance_of(contract_address) == 100000000, "balance of AA must not be changed");
+        assert!(usdc_dispatcher.balance_of(0x001) == 0, "balance of 0x001 must be 0 after failed transfer");
+    }
+
+    
 
 
 }
